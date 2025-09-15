@@ -94,6 +94,7 @@ tmp/
 # data/*.db
 data/*.db-journal
 data/*.db.bak
+data/*.db.backup
 !data/.gitkeep
 !data/nodes.db
 
@@ -126,6 +127,7 @@ n8n-mcp-wrapper.sh
 
 # Package tarballs
 *.tgz
+# Byterover rules files
 .clinerules/byterover-rules.md
 .kilocode/rules/byterover-rules.md
 .roo/rules/byterover-rules.md
@@ -134,3 +136,6 @@ n8n-mcp-wrapper.sh
 .kiro/steering/byterover-rules.md
 .qoder/rules/byterover-rules.md
 .augment/rules/byterover-rules.md
+
+# MCP configuration files
+.mcp.json

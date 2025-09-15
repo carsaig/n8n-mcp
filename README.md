@@ -2,11 +2,11 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub stars](https://img.shields.io/github/stars/czlonkowski/n8n-mcp?style=social)](https://github.com/czlonkowski/n8n-mcp)
-[![Version](https://img.shields.io/badge/version-2.10.5-blue.svg)](https://github.com/czlonkowski/n8n-mcp)
+[![Version](https://img.shields.io/badge/version-2.11.0-blue.svg)](https://github.com/czlonkowski/n8n-mcp)
 [![npm version](https://img.shields.io/npm/v/n8n-mcp.svg)](https://www.npmjs.com/package/n8n-mcp)
 [![codecov](https://codecov.io/gh/czlonkowski/n8n-mcp/graph/badge.svg?token=YOUR_TOKEN)](https://codecov.io/gh/czlonkowski/n8n-mcp)
 [![Tests](https://img.shields.io/badge/tests-1728%20passing-brightgreen.svg)](https://github.com/czlonkowski/n8n-mcp/actions)
-[![n8n version](https://img.shields.io/badge/n8n-^1.107.4-orange.svg)](https://github.com/n8n-io/n8n)
+[![n8n version](https://img.shields.io/badge/n8n-^1.110.1-orange.svg)](https://github.com/n8n-io/n8n)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fczlonkowski%2Fn8n--mcp-green.svg)](https://github.com/czlonkowski/n8n-mcp/pkgs/container/n8n-mcp)
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/n8n-mcp?referralCode=n8n-mcp)
 
@@ -357,38 +357,55 @@ You are an expert in n8n automation software using n8n-MCP tools. Your role is t
 
 1. **ALWAYS start new conversation with**: `tools_documentation()` to understand best practices and available tools.
 
-2. **Discovery Phase** - Find the right nodes:
+2. **Template Discovery Phase** 
+   - `search_templates_by_metadata({complexity: "simple"})` - Find skill-appropriate templates
+   - `get_templates_for_task('webhook_processing')` - Get curated templates by task
+   - `search_templates('slack notification')` - Text search for specific needs
+   - `list_node_templates(['n8n-nodes-base.slack'])` - Find templates using specific nodes
+   
+   **Template filtering strategies**:
+   - **For beginners**: `complexity: "simple"` and `maxSetupMinutes: 30`
+   - **By role**: `targetAudience: "marketers"` or `"developers"` or `"analysts"`
+   - **By time**: `maxSetupMinutes: 15` for quick wins
+   - **By service**: `requiredService: "openai"` to find compatible templates
+
+3. **Discovery Phase** - Find the right nodes (if no suitable template):
    - Think deeply about user request and the logic you are going to build to fulfill it. Ask follow-up questions to clarify the user's intent, if something is unclear. Then, proceed with the rest of your instructions.
    - `search_nodes({query: 'keyword'})` - Search by functionality
    - `list_nodes({category: 'trigger'})` - Browse by category
    - `list_ai_tools()` - See AI-capable nodes (remember: ANY node can be an AI tool!)
 
-3. **Configuration Phase** - Get node details efficiently:
+4. **Configuration Phase** - Get node details efficiently:
    - `get_node_essentials(nodeType)` - Start here! Only 10-20 essential properties
    - `search_node_properties(nodeType, 'auth')` - Find specific properties
    - `get_node_for_task('send_email')` - Get pre-configured templates
    - `get_node_documentation(nodeType)` - Human-readable docs when needed
    - It is good common practice to show a visual representation of the workflow architecture to the user and asking for opinion, before moving forward. 
 
-4. **Pre-Validation Phase** - Validate BEFORE building:
+5. **Pre-Validation Phase** - Validate BEFORE building:
    - `validate_node_minimal(nodeType, config)` - Quick required fields check
    - `validate_node_operation(nodeType, config, profile)` - Full operation-aware validation
    - Fix any validation errors before proceeding
 
-5. **Building Phase** - Create the workflow:
-   - Use validated configurations from step 4
+6. **Building Phase** - Create or customize the workflow:
+   - If using template: `get_template(templateId, {mode: "full"})`
+   - **MANDATORY ATTRIBUTION**: When using a template, ALWAYS inform the user:
+     - "This workflow is based on a template by **[author.name]** (@[author.username])"
+     - "View the original template at: [url]"
+     - Example: "This workflow is based on a template by **David Ashby** (@cfomodz). View the original at: https://n8n.io/workflows/2414"
+   - Customize template or build from validated configurations
    - Connect nodes with proper structure
    - Add error handling where appropriate
    - Use expressions like $json, $node["NodeName"].json
    - Build the workflow in an artifact for easy editing downstream (unless the user asked to create in n8n instance)
 
-6. **Workflow Validation Phase** - Validate complete workflow:
+7. **Workflow Validation Phase** - Validate complete workflow:
    - `validate_workflow(workflow)` - Complete validation including connections
    - `validate_workflow_connections(workflow)` - Check structure and AI tool connections
    - `validate_workflow_expressions(workflow)` - Validate all n8n expressions
    - Fix any issues found before deployment
 
-7. **Deployment Phase** (if n8n API configured):
+8. **Deployment Phase** (if n8n API configured):
    - `n8n_create_workflow(workflow)` - Deploy validated workflow
    - `n8n_validate_workflow({id: 'workflow-id'})` - Post-deployment validation
    - `n8n_update_partial_workflow()` - Make incremental updates using diffs
@@ -396,6 +413,9 @@ You are an expert in n8n automation software using n8n-MCP tools. Your role is t
 
 ## Key Insights
 
+- **TEMPLATES FIRST** - Always check for existing templates before building from scratch (2,500+ available!)
+- **ATTRIBUTION REQUIRED** - Always credit template authors with name, username, and link to n8n.io
+- **SMART FILTERING** - Use metadata filters to find templates matching user skill level and time constraints
 - **USE CODE NODE ONLY WHEN IT IS NECESSARY** - always prefer to use standard nodes over code node. Use code node only when you are sure you need it.
 - **VALIDATE EARLY AND OFTEN** - Catch errors before they reach deployment
 - **USE DIFF UPDATES** - Use n8n_update_partial_workflow for 80-90% token savings
@@ -434,27 +454,50 @@ You are an expert in n8n automation software using n8n-MCP tools. Your role is t
 
 ## Example Workflow
 
-### 1. Discovery & Configuration
+### Smart Template-First Approach
+
+#### 1. Find existing templates
+// Find simple Slack templates for marketers
+const templates = search_templates_by_metadata({
+  requiredService: 'slack',
+  complexity: 'simple',
+  targetAudience: 'marketers',
+  maxSetupMinutes: 30
+})
+
+// Or search by text
+search_templates('slack notification')
+
+// Or get curated templates
+get_templates_for_task('slack_integration')
+
+#### 2. Use and customize template
+const workflow = get_template(templates.items[0].id, {mode: 'full'})
+validate_workflow(workflow)
+
+### Building from Scratch (if no suitable template)
+
+#### 1. Discovery & Configuration
 search_nodes({query: 'slack'})
 get_node_essentials('n8n-nodes-base.slack')
 
-### 2. Pre-Validation
+#### 2. Pre-Validation
 validate_node_minimal('n8n-nodes-base.slack', {resource:'message', operation:'send'})
 validate_node_operation('n8n-nodes-base.slack', fullConfig, 'runtime')
 
-### 3. Build Workflow
+#### 3. Build Workflow
 // Create workflow JSON with validated configs
 
-### 4. Workflow Validation
+#### 4. Workflow Validation
 validate_workflow(workflowJson)
 validate_workflow_connections(workflowJson)
 validate_workflow_expressions(workflowJson)
 
-### 5. Deploy (if configured)
+#### 5. Deploy (if configured)
 n8n_create_workflow(validatedWorkflow)
 n8n_validate_workflow({id: createdWorkflowId})
 
-### 6. Update Using Diffs
+#### 6. Update Using Diffs
 n8n_update_partial_workflow({
   workflowId: id,
   operations: [
@@ -464,15 +507,24 @@ n8n_update_partial_workflow({
 
 ## Important Rules
 
-- ALWAYS validate before building
-- ALWAYS validate after building
-- NEVER deploy unvalidated workflows
+- ALWAYS check for existing templates before building from scratch
+- LEVERAGE metadata filters to find skill-appropriate templates
+- **ALWAYS ATTRIBUTE TEMPLATES**: When using any template, you MUST share the author's name, username, and link to the original template on n8n.io
+- VALIDATE templates before deployment (they may need updates)
 - USE diff operations for updates (80-90% token savings)
 - STATE validation results clearly
 - FIX all errors before proceeding
+
+## Template Discovery Tips
+
+- **97.5% of templates have metadata** - Use smart filtering!
+- **Filter combinations work best** - Combine complexity + setup time + service
+- **Templates save 70-90% development time** - Always check first
+- **Metadata is AI-generated** - Occasionally imprecise but highly useful
+- **Use `includeMetadata: false` for fast browsing** - Add metadata only when needed
 ```
 
-Save these instructions in your Claude Project for optimal n8n workflow assistance with comprehensive validation.
+Save these instructions in your Claude Project for optimal n8n workflow assistance with intelligent template discovery.
 
 ## 🚨 Important: Sharing Guidelines
 
@@ -523,6 +575,14 @@ Once connected, Claude can use these powerful tools:
 - **`search_node_properties`** - Find specific properties within nodes
 - **`list_ai_tools`** - List all AI-capable nodes (ANY node can be used as AI tool!)
 - **`get_node_as_tool_info`** - Get guidance on using any node as an AI tool
+
+### Template Tools
+- **`list_templates`** - Browse all templates with descriptions and optional metadata (2,500+ templates)
+- **`search_templates`** - Text search across template names and descriptions
+- **`search_templates_by_metadata`** - Advanced filtering by complexity, setup time, services, audience
+- **`list_node_templates`** - Find templates using specific nodes
+- **`get_template`** - Get complete workflow JSON for import
+- **`get_templates_for_task`** - Curated templates for common automation tasks
 
 ### Advanced Tools
 - **`get_node_for_task`** - Pre-configured node settings for common tasks
@@ -806,6 +866,23 @@ See [Automated Release Guide](./docs/AUTOMATED_RELEASES.md) for complete details
 - [n8n](https://n8n.io) team for the workflow automation platform
 - [Anthropic](https://anthropic.com) for the Model Context Protocol
 - All contributors and users of this project
+
+### Template Attribution
+
+All workflow templates in this project are fetched from n8n's public template gallery at [n8n.io/workflows](https://n8n.io/workflows). Each template includes:
+- Full attribution to the original creator (name and username)
+- Direct link to the source template on n8n.io
+- Original workflow ID for reference
+
+The AI agent instructions in this project contain mandatory attribution requirements. When using any template, the AI will automatically:
+- Share the template author's name and username
+- Provide a direct link to the original template on n8n.io
+- Display attribution in the format: "This workflow is based on a template by **[author]** (@[username]). View the original at: [url]"
+
+Template creators retain all rights to their workflows. This project indexes templates to improve discoverability through AI assistants. If you're a template creator and have concerns about your template being indexed, please open an issue.
+
+Special thanks to the prolific template contributors whose work helps thousands of users automate their workflows, including:
+**David Ashby** (@cfomodz), **Yaron Been** (@yaron-nofluff), **Jimleuk** (@jimleuk), **Davide** (@n3witalia), **David Olusola** (@dae221), **Ranjan Dailata** (@ranjancse), **Airtop** (@cesar-at-airtop), **Joseph LePage** (@joe), **Don Jayamaha Jr** (@don-the-gem-dealer), **Angel Menendez** (@djangelic), and the entire n8n community of creators!
 
 ---
 
