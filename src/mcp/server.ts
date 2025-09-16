@@ -336,12 +336,19 @@ export class N8NDocumentationMCPServer {
             },
           ],
         };
-        
+
         // For tools with outputSchema, structuredContent is REQUIRED by MCP spec
-        if (name.startsWith('validate_') && structuredContent !== null) {
-          mcpResponse.structuredContent = structuredContent;
+        // MCP specification: "If the Tool defines an outputSchema, this field MUST be present"
+        if (name.startsWith('validate_')) {
+          logger.debug(`Setting structuredContent for ${name}:`, {
+            structuredContentType: typeof structuredContent,
+            structuredContentNull: structuredContent === null,
+            structuredContentUndefined: structuredContent === undefined,
+            structuredContentValue: structuredContent
+          });
+          mcpResponse.structuredContent = structuredContent; // Always set, even if null
         }
-        
+
         return mcpResponse;
       } catch (error) {
         logger.error(`Error executing tool ${name}`, error);
@@ -2606,10 +2613,25 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
       return response;
     } catch (error) {
       logger.error('Error validating workflow:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error validating workflow';
+
       return {
         valid: false,
-        error: error instanceof Error ? error.message : 'Unknown error validating workflow',
-        tip: 'Ensure the workflow JSON includes nodes array and connections object'
+        summary: {
+          totalNodes: 0,
+          enabledNodes: 0,
+          triggerNodes: 0,
+          validConnections: 0,
+          invalidConnections: 0,
+          expressionsValidated: 0,
+          errorCount: 1,
+          warningCount: 0
+        },
+        errors: [{
+          node: 'workflow',
+          message: errorMessage,
+          details: 'Ensure the workflow JSON includes nodes array and connections object'
+        }]
       };
     }
   }
@@ -2672,9 +2694,20 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
       return response;
     } catch (error) {
       logger.error('Error validating workflow connections:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error validating connections';
+
       return {
         valid: false,
-        error: error instanceof Error ? error.message : 'Unknown error validating connections'
+        statistics: {
+          totalNodes: 0,
+          triggerNodes: 0,
+          validConnections: 0,
+          invalidConnections: 0
+        },
+        errors: [{
+          node: 'workflow',
+          message: errorMessage
+        }]
       };
     }
   }
@@ -2745,9 +2778,18 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
       return response;
     } catch (error) {
       logger.error('Error validating workflow expressions:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error validating expressions';
+
       return {
         valid: false,
-        error: error instanceof Error ? error.message : 'Unknown error validating expressions'
+        statistics: {
+          totalNodes: 0,
+          expressionsValidated: 0
+        },
+        errors: [{
+          node: 'workflow',
+          message: errorMessage
+        }]
       };
     }
   }

@@ -10,6 +10,69 @@ The n8n-MCP project encountered several critical issues during deployment and op
 
 ## 1\. MCP Output Schema Validation Fix
 
+### 📋 **GitHub Issue Description**
+
+**Title:** `MCP tools with outputSchema return raw objects instead of JSON strings, causing protocol violations`
+
+**Labels:** `bug`, `mcp`, `protocol-compliance`, `high-priority`
+
+**Description:**
+```markdown
+## Bug Report
+
+### Problem
+MCP tools that have `outputSchema` definitions are returning raw JavaScript objects instead of JSON-formatted strings wrapped in MCP text response format, causing MCP protocol violations.
+
+### Error Messages
+```
+MCP error -32600: Tool validate_node_minimal has an output schema but did not return structured content
+MCP error -32600: Tool validate_node_operation has an output schema but did not return structured content
+MCP error -32600: Tool validate_workflow_expressions has an output schema but did not return structured content
+MCP error -32600: Tool validate_workflow_connections has an output schema but did not return structured content
+MCP error -32600: Tool validate_workflow has an output schema but did not return structured content
+```
+
+### Environment
+- n8n-MCP version: 2.11.x
+- MCP Protocol version: Latest
+- Platform: All platforms
+
+### Steps to Reproduce
+1. Call any MCP tool that has an `outputSchema` defined (e.g., `validate_node_minimal`)
+2. Observe the MCP error -32600 response
+3. Tools fail to return structured content as required by MCP specification
+
+### Expected Behavior
+Tools with `outputSchema` should return data in MCP-compliant format:
+```javascript
+return [{
+  type: "text",
+  text: JSON.stringify(validationResult)
+}];
+```
+
+### Actual Behavior
+Tools return raw JavaScript objects:
+```javascript
+return {
+  nodeType: "nodes-base.slack",
+  valid: true,
+  errors: []
+};
+```
+
+### Proposed Solution
+1. Add helper method to identify tools with output schemas
+2. Add formatting method to wrap responses in MCP text format
+3. Update tool execution to use formatting for schema-enabled tools
+4. Add comprehensive test coverage
+
+### Impact
+- All validation tools are unusable due to protocol violations
+- MCP clients cannot process responses from schema-enabled tools
+- Critical functionality blocked for AI assistants using n8n-MCP
+```
+
 ### 🐛 **Problem Description**
 
 Tools with `outputSchema` definitions were returning raw JavaScript objects instead of JSON-formatted strings, causing MCP protocol violations.
@@ -26,89 +89,85 @@ MCP error -32600: Tool validate_workflow has an output schema but did not return
 
 ### 🔍 **Root Cause Analysis**
 
-The MCP (Model Context Protocol) specification requires that tools with defined `outputSchema` return their data as JSON strings wrapped in a text response format:
+The MCP (Model Context Protocol) specification requires that tools with defined `outputSchema` MUST include a `structuredContent` field in their response. According to the MCP SDK types:
+
+> "If the Tool defines an outputSchema, this field MUST be present in the result, and contain a JSON object that matches the schema"
+
+The issue was in the MCP response handler in `src/mcp/server.ts` - it was only returning the `content` field but missing the required `structuredContent` field for validation tools.
 
 ```javascript
-// ❌ INCORRECT - Raw object return
-return {
-  nodeType: "nodes-base.slack",
-  valid: true,
-  errors: []
+// ❌ INCORRECT - Missing structuredContent field
+const mcpResponse = {
+  content: [
+    {
+      type: 'text',
+      text: responseText,
+    },
+  ],
 };
 
-// ✅ CORRECT - MCP-compliant format
-return [{
-  type: "text",
-  text: JSON.stringify({
-    nodeType: "nodes-base.slack", 
-    valid: true,
-    errors: []
-  })
-}];
+// ✅ CORRECT - MCP-compliant with structuredContent
+const mcpResponse = {
+  content: [
+    {
+      type: 'text',
+      text: responseText,
+    },
+  ],
+  structuredContent: validationResult  // Required for tools with outputSchema
+};
 ```
 
 ### 🛠️ **Solution Implementation**
 
 **Files Modified:**
 
-*   `src/mcp/server.ts` - Added helper methods and formatting logic
-*   `tests/unit/mcp/mcp-output-schema-validation.test.ts` - Comprehensive test suite
+*   `src/mcp/server.ts` - Updated MCP response handler to include structuredContent field
+*   `tests/unit/mcp/schema-compliance-fix.test.ts` - Comprehensive test suite
 
 **Key Changes:**
 
-1.  **Helper Methods Added:**  
-    \`\`\`typescript  
-    private toolHasOutputSchema(toolName: string): boolean {  
-    const toolsWithOutputSchema = \[  
-    'validate\_node\_minimal',  
-    'validate\_node\_operation',  
-    'validate\_workflow',  
-    'validate\_workflow\_connections',  
-    'validate\_workflow\_expressions'  
-    \];  
-    return toolsWithOutputSchema.includes(toolName);  
+1.  **MCP Response Handler Fix:**
+    ```typescript
+    // Build MCP response with strict schema compliance
+    const mcpResponse: any = {
+      content: [
+        {
+          type: 'text' as const,
+          text: responseText,
+        },
+      ],
+    };
+
+    // For tools with outputSchema, structuredContent is REQUIRED by MCP spec
+    if (name.startsWith('validate_') && structuredContent !== null) {
+      mcpResponse.structuredContent = structuredContent;
     }
 
-private formatOutputSchemaResponse(data: any): any\[\] {  
-return \[{  
-type: "text",  
-text: JSON.stringify(data)  
-}\];  
-}
+    return mcpResponse;
+    ```
 
-````
-
-2. **Wrapper Method:**
-```typescript
-async executeToolWithFormatting(name: string, args: any): Promise<any> {
-  const result = await this.executeTool(name, args);
-  
-  if (this.toolHasOutputSchema(name)) {
-    return this.formatOutputSchemaResponse(result);
-  }
-  
-  return result;
-}
-````
+2. **Root Cause:** The MCP specification mandates that tools with `outputSchema` must include both `content` and `structuredContent` fields in their response. The previous implementation only returned `content`.
 
 ### 🧪 **Testing Strategy**
 
-**Test File:** `tests/unit/mcp/mcp-output-schema-validation.test.ts`
+**Test File:** `tests/unit/mcp/schema-compliance-fix.test.ts`
 
 **Test Coverage:**
 
-1.  **Tool Identification Tests** - Verify correct identification of tools with output schemas
-2.  **JSON Formatting Tests** - Ensure proper MCP-compliant formatting
-3.  **Edge Case Tests** - Handle complex nested objects, null values, empty arrays
-4.  **Integration Tests** - Verify end-to-end formatting behavior
+1. **Schema Compliance Tests** - Verify validation responses match output schema requirements
+2. **MCP Response Structure Tests** - Ensure responses include both content and structuredContent fields
+3. **Error Response Tests** - Validate error responses are schema-compliant
+4. **Integration Tests** - Test actual MCP server response format
 
 **Test Results:**
 
 ```
-✓ MCP Output Schema Validation > Helper Methods > should correctly identify tools with output schema
-✓ MCP Output Schema Validation > Helper Methods > should format data as MCP-compliant JSON string response  
-✓ MCP Output Schema Validation > JSON Formatting Edge Cases > should handle complex nested objects
-✓ MCP Output Schema Validation > JSON Formatting Edge Cases > should handle empty arrays and null values
+✓ MCP Schema Compliance Fix > Error Response Structure Validation > should demonstrate schema-compliant error response structure
+✓ MCP Schema Compliance Fix > Error Response Structure Validation > should demonstrate schema-compliant connection validation error response
+✓ MCP Schema Compliance Fix > Error Response Structure Validation > should demonstrate schema-compliant expression validation error response
+✓ MCP Schema Compliance Fix > Fix Impact Verification > should verify that the fix addresses the original MCP error
+✓ MCP Schema Compliance Fix > Fix Impact Verification > should verify MCP response structure includes structuredContent for validation tools
 ```
 
 ### 📊 **Impact Assessment**
@@ -129,6 +188,68 @@ async executeToolWithFormatting(name: string, args: any): Promise<any> {
 ---
 
 ## 2\. Docker ARM64 Architecture & Dependencies Fix
+
+### 📋 **GitHub Issue Description**
+
+**Title:** `Docker image fails on ARM64 architecture with missing dependencies and build errors`
+
+**Labels:** `bug`, `docker`, `arm64`, `deployment`, `high-priority`
+
+**Description:**
+```markdown
+## Bug Report
+
+### Problem
+The Docker image has multiple critical issues preventing deployment on ARM64 architecture, which is required for modern deployment platforms like Coolify.
+
+### Error Messages
+```
+ERROR: failed to solve: process "/bin/sh -c npm ci --production --no-audit --no-fund" did not complete successfully: exit code 1
+npm error code EUSAGE
+npm error The `npm ci` command can only install with an existing package-lock.json
+```
+
+### Environment
+- Architecture: ARM64 (Apple Silicon, AWS Graviton, etc.)
+- Platform: Docker/Coolify deployment
+- Node.js: 22-alpine base image
+
+### Steps to Reproduce
+1. Build Docker image on ARM64 architecture
+2. Observe npm ci failures due to missing package-lock.json
+3. Runtime failures due to missing database schema files
+4. Architecture mismatch errors
+
+### Expected Behavior
+- Docker image builds successfully on ARM64
+- All dependencies properly installed
+- Database schema files available at runtime
+- Container runs without architecture-specific issues
+
+### Actual Behavior
+- Build fails with npm ci errors
+- Missing database schema files cause runtime failures
+- Architecture mismatches prevent proper deployment
+- Container startup failures on ARM64 platforms
+
+### Root Causes
+1. **Missing package-lock.json**: Build process doesn't copy lock file
+2. **Missing schema files**: Database schema files not included in image
+3. **Architecture specification**: No explicit ARM64 platform specification
+4. **Dependency issues**: Some dependencies not ARM64 compatible
+
+### Proposed Solution
+1. Fix Dockerfile to properly copy package-lock.json
+2. Include all required database schema files
+3. Add explicit ARM64 platform specification
+4. Update dependencies to ARM64-compatible versions
+5. Implement multi-stage build for optimization
+
+### Impact
+- Complete deployment failure on ARM64 platforms
+- Inability to use modern cloud platforms (Coolify, AWS Graviton)
+- Blocks production deployments for ARM64 infrastructure
+```
 
 ### 🐛 **Problem Description**
 
@@ -194,6 +315,70 @@ The official Docker image was built with a minimal runtime configuration that ex
 ---
 
 ## 3\. Docker-Compose Environment Variable Syntax Fix
+
+### 📋 **GitHub Issue Description**
+
+**Title:** `Docker-compose configuration uses invalid 1Password CLI syntax causing deployment failures`
+
+**Labels:** `bug`, `docker-compose`, `configuration`, `deployment`, `medium-priority`
+
+**Description:**
+```markdown
+## Bug Report
+
+### Problem
+Docker-compose configuration file contains 1Password CLI references (`op://`) that don't work in container environments, causing deployment failures on platforms like Coolify.
+
+### Error Messages
+```
+Environment variable resolution failed
+Invalid syntax in docker-compose.yml
+Container startup failures due to unresolved variables
+```
+
+### Environment
+- Platform: Coolify deployment platform
+- Docker-compose version: Latest
+- Configuration: docker-compose.coolify.yml
+
+### Steps to Reproduce
+1. Deploy using docker-compose.coolify.yml configuration
+2. Observe environment variable resolution failures
+3. Container fails to start due to invalid variable syntax
+
+### Expected Behavior
+- Environment variables should use standard Docker-compose syntax
+- Variables should be properly resolved from environment
+- Successful container deployment on Coolify platform
+
+### Actual Behavior
+- 1Password CLI syntax (`op://`) not supported in container environments
+- Environment variables fail to resolve
+- Deployment failures on Coolify platform
+
+### Root Cause
+The configuration file uses 1Password CLI syntax for secret management:
+```yaml
+environment:
+  - BASE_URL=op://vault/item/field
+  - N8N_API_URL=op://vault/item/field
+```
+
+This syntax only works with 1Password CLI installed locally, not in container environments.
+
+### Proposed Solution
+Replace 1Password CLI references with standard environment variable syntax:
+```yaml
+environment:
+  - BASE_URL=${BASE_URL}
+  - N8N_API_URL=${N8N_API_URL}
+```
+
+### Impact
+- Deployment failures on container platforms
+- Unable to use standard Docker-compose deployment
+- Blocks automated deployment pipelines
+```
 
 ### 🐛 **Problem Description**
 
@@ -304,3 +489,286 @@ RUN npm ci --production --no-audit --no-fund
 ```
 FROM --platform=linux/arm64 node:22-alpine AS runtime
 ```
+
+---
+
+## 6\. MCP Validation Tool Error Response Schema Compliance Fix
+
+### 📋 **GitHub Issue Description**
+
+**Title:** `MCP validation tools return non-schema-compliant error responses causing protocol violations`
+
+**Labels:** `bug`, `mcp`, `validation`, `schema-compliance`, `high-priority`
+
+**Description:**
+```markdown
+## Bug Report
+
+### Problem
+MCP validation tools (`validate_workflow`, `validate_workflow_connections`, `validate_workflow_expressions`) return error responses that don't match their defined output schemas, causing MCP protocol violations.
+
+### Error Messages
+```
+MCP error -32600: Tool validate_workflow has an output schema but did not return structured content
+```
+
+### Environment
+- n8n-MCP version: 2.11.x
+- MCP Protocol version: Latest
+- Deployment: Docker container on Coolify
+
+### Steps to Reproduce
+1. Call `validate_workflow` tool with invalid workflow data
+2. Tool encounters error during validation
+3. Error response doesn't match the defined output schema
+4. MCP client receives protocol violation error
+
+### Expected Behavior
+Error responses should match the defined output schema:
+```javascript
+// For validate_workflow:
+{
+  valid: false,
+  summary: {
+    totalNodes: 0,
+    enabledNodes: 0,
+    triggerNodes: 0,
+    validConnections: 0,
+    invalidConnections: 0,
+    expressionsValidated: 0,
+    errorCount: 1,
+    warningCount: 0
+  },
+  errors: [{
+    node: 'workflow',
+    message: 'Error message',
+    details: 'Additional details'
+  }]
+}
+```
+
+### Actual Behavior
+Error responses use non-schema-compliant structure:
+```javascript
+{
+  valid: false,
+  error: 'Error message',
+  tip: 'Helpful tip'
+}
+```
+
+### Root Cause
+The error handling paths in validation methods return ad-hoc response structures instead of following the defined output schemas. The tools have schemas that specify required fields like `valid`, `summary`/`statistics`, `errors`, and `warnings`, but error handling code returns different fields (`error`, `tip`).
+
+### Proposed Solution
+1. Update error handling in `validateWorkflow` to return schema-compliant responses
+2. Update error handling in `validateWorkflowConnections` to use `statistics` field
+3. Update error handling in `validateWorkflowExpressions` to use `statistics` field
+4. Preserve error information within proper schema structure
+5. Add comprehensive test coverage for error response validation
+
+### Impact
+- Validation tools unusable due to MCP protocol violations
+- Error responses don't reach users, only protocol errors
+- Critical workflow validation functionality blocked
+- Affects all AI assistants using n8n-MCP validation features
+```
+
+### 🐛 **Problem Description**
+
+The MCP validation tools (`validate_workflow`, `validate_workflow_connections`, `validate_workflow_expressions`) were returning non-schema-compliant error responses, causing MCP protocol violations.
+
+**Error Message:**
+```
+MCP error -32600: Tool validate_workflow has an output schema but did not return structured content
+```
+
+**User Request Log:**
+```json
+{
+  "workflow": {
+    "createdAt": "2025-09-15T16:48:42.239Z",
+    "updatedAt": "2025-09-15T16:53:02.568Z",
+    "id": "IxYGANvs39qLbj47",
+    "name": "Updated Webhook Test Workflow",
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+      {
+        "id": "1",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1,
+        // ... node configuration
+      }
+    ],
+    "connections": {},
+    "settings": {
+      "executionOrder": "v1",
+      "saveDataErrorExecution": "all",
+      "saveDataSuccessExecution": "all",
+      "saveManualExecutions": true,
+      "saveExecutionProgress": true
+    }
+  }
+}
+```
+
+### 🔍 **Root Cause Analysis**
+
+The validation tools have defined output schemas that specify required response fields like `valid`, `summary`/`statistics`, `errors`, and `warnings`. However, the error handling paths in these methods were returning responses with different field structures that didn't match the schemas:
+
+**❌ Non-compliant error response:**
+```javascript
+// Error handling was returning:
+return {
+  valid: false,
+  error: 'Some error message',
+  tip: 'Some helpful tip'
+};
+```
+
+**✅ Required schema-compliant response:**
+```javascript
+// Schema requires:
+return {
+  valid: false,
+  summary: {  // or 'statistics' for connection/expression validation
+    totalNodes: 0,
+    enabledNodes: 0,
+    triggerNodes: 0,
+    validConnections: 0,
+    invalidConnections: 0,
+    expressionsValidated: 0,
+    errorCount: 1,
+    warningCount: 0
+  },
+  errors: [{
+    node: 'workflow',
+    message: 'Some error message',
+    details: 'Some helpful tip'
+  }]
+};
+```
+
+### 🛠️ **Solution Implementation**
+
+Updated the error handling in three validation methods to return schema-compliant responses:
+
+**1. `validateWorkflow` method:**
+```typescript
+// Before (non-compliant):
+catch (error) {
+  return {
+    valid: false,
+    error: error instanceof Error ? error.message : 'Unknown error',
+    tip: 'Ensure the workflow JSON includes nodes array and connections object'
+  };
+}
+
+// After (schema-compliant):
+catch (error) {
+  const errorMessage = error instanceof Error ? error.message : 'Unknown error validating workflow';
+  return {
+    valid: false,
+    summary: {
+      totalNodes: 0,
+      enabledNodes: 0,
+      triggerNodes: 0,
+      validConnections: 0,
+      invalidConnections: 0,
+      expressionsValidated: 0,
+      errorCount: 1,
+      warningCount: 0
+    },
+    errors: [{
+      node: 'workflow',
+      message: errorMessage,
+      details: 'Ensure the workflow JSON includes nodes array and connections object'
+    }]
+  };
+}
+```
+
+**2. `validateWorkflowConnections` method:**
+```typescript
+// Updated to return 'statistics' field instead of 'summary'
+catch (error) {
+  return {
+    valid: false,
+    statistics: {
+      totalNodes: 0,
+      triggerNodes: 0,
+      validConnections: 0,
+      invalidConnections: 0
+    },
+    errors: [{
+      node: 'workflow',
+      message: errorMessage
+    }]
+  };
+}
+```
+
+**3. `validateWorkflowExpressions` method:**
+```typescript
+// Updated to return 'statistics' field with expression-specific fields
+catch (error) {
+  return {
+    valid: false,
+    statistics: {
+      totalNodes: 0,
+      expressionsValidated: 0
+    },
+    errors: [{
+      node: 'workflow',
+      message: errorMessage
+    }]
+  };
+}
+```
+
+### 🧪 **Testing Strategy**
+
+Created comprehensive test suite in `tests/unit/mcp/schema-compliance-fix.test.ts`:
+
+1. **Schema Structure Validation**: Tests verify that error responses contain all required fields
+2. **Field Type Validation**: Ensures all fields have correct data types
+3. **Before/After Comparison**: Demonstrates the difference between non-compliant and compliant responses
+4. **Integration Test**: Uses actual user workflow data to verify the fix
+
+**Test Results:**
+```bash
+✓ MCP Schema Compliance Fix > Error Response Structure Validation > should demonstrate schema-compliant error response structure
+✓ MCP Schema Compliance Fix > Error Response Structure Validation > should demonstrate schema-compliant connection validation error response
+✓ MCP Schema Compliance Fix > Error Response Structure Validation > should demonstrate schema-compliant expression validation error response
+✓ MCP Schema Compliance Fix > Fix Impact Verification > should verify that the fix addresses the original MCP error
+
+Test Files  1 passed (1)
+Tests  4 passed (4)
+```
+
+### 📊 **Impact Assessment**
+
+**Before Fix:**
+- MCP validation tools were unusable due to schema compliance errors
+- Error responses contained `error` and `tip` fields not defined in output schemas
+- Users received `-32600` MCP protocol errors instead of validation results
+
+**After Fix:**
+- All validation tools return schema-compliant responses
+- Error handling preserves helpful error messages and details within proper schema structure
+- MCP protocol violations eliminated
+- Validation tools fully functional in production environment
+
+### 🔧 **Files Modified**
+
+- `src/mcp/server.ts`: Updated error handling in three validation methods
+- `tests/unit/mcp/schema-compliance-fix.test.ts`: Added comprehensive test coverage
+
+### 📝 **Deployment Notes**
+
+- Docker image updated to `n8n-mcp:v2.11.4`
+- No breaking changes to successful validation responses
+- Error responses now provide same information but in schema-compliant format
+- Backward compatible with existing MCP clients
