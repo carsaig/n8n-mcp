@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
-# Ultra-optimized Dockerfile - minimal runtime dependencies (no n8n packages)
+# ARM64-compatible Dockerfile with full n8n packages
 
 # Stage 1: Builder (TypeScript compilation only)
-FROM node:22-alpine AS builder
+FROM --platform=linux/arm64 node:22-alpine AS builder
 WORKDIR /app
 
 # Copy tsconfig files for TypeScript compilation
@@ -23,18 +23,18 @@ COPY src ./src
 # These will be compiled but not included in runtime
 RUN npx tsc -p tsconfig.build.json
 
-# Stage 2: Runtime (minimal dependencies)
-FROM node:22-alpine AS runtime
+# Stage 2: Runtime (full n8n dependencies)
+FROM --platform=linux/arm64 node:22-alpine AS runtime
 WORKDIR /app
 
 # Install only essential runtime tools
 RUN apk add --no-cache curl su-exec && \
     rm -rf /var/cache/apk/*
 
-# Copy runtime-only package.json
-COPY package.runtime.json package.json
+# Copy full package.json with all n8n dependencies
+COPY package.json package-lock.json ./
 
-# Install runtime dependencies with cache mount
+# Install ALL dependencies including n8n packages
 RUN --mount=type=cache,target=/root/.npm \
     npm install --production --no-audit --no-fund
 
@@ -44,6 +44,7 @@ COPY --from=builder /app/dist ./dist
 # Copy pre-built database and required files
 # Cache bust: 2025-07-06-trigger-fix-v3 - includes is_trigger=true for webhook,cron,interval,emailReadImap
 COPY data/nodes.db ./data/
+COPY src/database/schema.sql ./src/database/
 COPY src/database/schema-optimized.sql ./src/database/
 COPY .env.example ./
 
@@ -55,7 +56,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/n8n-mcp
 
 # Add container labels
 LABEL org.opencontainers.image.source="https://github.com/czlonkowski/n8n-mcp"
-LABEL org.opencontainers.image.description="n8n MCP Server - Runtime Only"
+LABEL org.opencontainers.image.description="n8n MCP Server - Full n8n Dependencies"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="n8n-mcp"
 
