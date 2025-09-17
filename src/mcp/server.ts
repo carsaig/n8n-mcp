@@ -457,8 +457,17 @@ export class N8NDocumentationMCPServer {
    * Sanitize validation result to match outputSchema
    */
   private sanitizeValidationResult(result: any, toolName: string): any {
+    process.stderr.write(`[SANITIZE-DEBUG] sanitizeValidationResult called for tool: ${toolName}\n`);
+    process.stderr.write(`[SANITIZE-DEBUG] Input result type: ${typeof result}\n`);
+
     if (!result || typeof result !== 'object') {
+      process.stderr.write(`[SANITIZE-DEBUG] Early return - result is not object\n`);
       return result;
+    }
+
+    process.stderr.write(`[SANITIZE-DEBUG] Input result keys: ${Object.keys(result).join(', ')}\n`);
+    if (result.errors && Array.isArray(result.errors) && result.errors.length > 0) {
+      process.stderr.write(`[SANITIZE-DEBUG] Input errors[0]: ${JSON.stringify(result.errors[0])}\n`);
     }
 
     const sanitized = { ...result };
@@ -501,11 +510,38 @@ export class N8NDocumentationMCPServer {
       return filtered;
     } else if (toolName.startsWith('validate_workflow')) {
       sanitized.valid = Boolean(sanitized.valid);
-      
-      // Ensure arrays exist
-      sanitized.errors = Array.isArray(sanitized.errors) ? sanitized.errors : [];
-      sanitized.warnings = Array.isArray(sanitized.warnings) ? sanitized.warnings : [];
-      
+
+      // Helper function to sanitize validation items (errors/warnings) for schema compliance
+      const sanitizeValidationItem = (item: any) => {
+        if (!item) return {};
+        process.stderr.write(`[SANITIZE-DEBUG] Processing validation item: ${JSON.stringify(item)}\n`);
+        const sanitizedItem = {
+          ...item,
+          node: String(item.node || ''),
+          message: String(item.message || ''),
+          details: typeof item.details === 'object' && item.details !== null
+            ? JSON.stringify(item.details)
+            : String(item.details || '')
+        };
+        process.stderr.write(`[SANITIZE-DEBUG] Sanitized item: ${JSON.stringify(sanitizedItem)}\n`);
+        return sanitizedItem;
+      };
+
+      process.stderr.write(`[SANITIZE-DEBUG] About to sanitize errors and warnings\n`);
+
+      // Ensure arrays exist and convert details objects to strings for schema compliance
+      sanitized.errors = Array.isArray(sanitized.errors)
+        ? sanitized.errors.map(sanitizeValidationItem)
+        : [];
+      sanitized.warnings = Array.isArray(sanitized.warnings)
+        ? sanitized.warnings.map(sanitizeValidationItem)
+        : [];
+
+      process.stderr.write(`[SANITIZE-DEBUG] After sanitization - errors count: ${sanitized.errors.length}\n`);
+      if (sanitized.errors.length > 0) {
+        process.stderr.write(`[SANITIZE-DEBUG] After sanitization - errors[0]: ${JSON.stringify(sanitized.errors[0])}\n`);
+      }
+
       // Ensure statistics/summary exists
       if (toolName === 'validate_workflow') {
         if (!sanitized.summary || typeof sanitized.summary !== 'object') {
@@ -534,7 +570,12 @@ export class N8NDocumentationMCPServer {
     }
 
     // Remove undefined values to ensure clean JSON
-    return JSON.parse(JSON.stringify(sanitized));
+    const finalResult = JSON.parse(JSON.stringify(sanitized));
+    process.stderr.write(`[SANITIZE-DEBUG] Final sanitized result keys: ${Object.keys(finalResult).join(', ')}\n`);
+    if (finalResult.errors && Array.isArray(finalResult.errors) && finalResult.errors.length > 0) {
+      process.stderr.write(`[SANITIZE-DEBUG] Final result errors[0]: ${JSON.stringify(finalResult.errors[0])}\n`);
+    }
+    return finalResult;
   }
 
   /**
@@ -2946,7 +2987,23 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
         logger.error('Error cleaning up cache:', error);
       }
     }
-    
+  }
+
+  // Get tool definition by name (for HTTP server MCP compliance)
+  public getToolDefinition(toolName: string): any | undefined {
+    // Combine all available tools (same logic as ListToolsRequestSchema handler)
+    let tools = [...n8nDocumentationToolsFinal];
+    const isConfigured = isN8nApiConfigured();
+
+    if (isConfigured) {
+      tools.push(...n8nManagementTools);
+    }
+
+    return tools.find(tool => tool.name === toolName);
+  }
+
+  // Close database connection if it exists
+  async close(): Promise<void> {
     // Close database connection if it exists
     if (this.db) {
       try {

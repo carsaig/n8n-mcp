@@ -396,19 +396,67 @@ export async function startFixedHTTPServer() {
               // Delegate to the MCP server
               const toolName = jsonRpcRequest.params?.name;
               const toolArgs = jsonRpcRequest.params?.arguments || {};
-              
+
               try {
                 const result = await mcpServer.executeTool(toolName, toolArgs);
+
+                // Build base response
+                const mcpResult: any = {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify(result, null, 2)
+                    }
+                  ]
+                };
+
+                // Add structuredContent for tools with outputSchema (MCP compliance)
+                const toolDefinition = mcpServer.getToolDefinition(toolName);
+                if (toolDefinition?.outputSchema) {
+                  process.stderr.write(`[HTTP-SANITIZE-DEBUG] Tool ${toolName} has outputSchema, sanitizing result\n`);
+
+                  let sanitizedResult = result;
+
+                  // TODO: This is a specific fix for validation tools which, in this HTTP context,
+                  // appear to bypass the MCP server's sanitizeValidationResult method.
+                  // For long-term maintainability, investigate routing this through the MCP server's
+                  // standard processing pipeline if possible.
+                  if (toolName.startsWith('validate_')) { // Using startsWith to cover all validation tools
+                    process.stderr.write(`[HTTP-SANITIZE-DEBUG] Sanitizing validation tool result for: ${toolName}\n`);
+                    process.stderr.write(`[HTTP-SANITIZE-DEBUG] Input result: ${JSON.stringify(result, null, 2)}\n`);
+
+                    // Helper function to sanitize validation items (errors/warnings) for schema compliance
+                    const sanitizeValidationItem = (item: any) => {
+                      if (!item) return {};
+                      return {
+                        ...item,
+                        node: String(item.node ?? ''), // Use nullish coalescing for clarity
+                        message: String(item.message ?? ''),
+                        details: typeof item.details === 'object' && item.details !== null
+                          ? JSON.stringify(item.details)
+                          : String(item.details ?? '')
+                      };
+                    };
+
+                    sanitizedResult = {
+                      ...result,
+                      errors: Array.isArray(result.errors)
+                        ? result.errors.map(sanitizeValidationItem)
+                        : [],
+                      warnings: Array.isArray(result.warnings)
+                        ? result.warnings.map(sanitizeValidationItem)
+                        : []
+                    };
+
+                    process.stderr.write(`[HTTP-SANITIZE-DEBUG] Final sanitized result: ${JSON.stringify(sanitizedResult, null, 2)}\n`);
+                  }
+
+                  mcpResult.structuredContent = sanitizedResult;
+                }
+
                 response = {
                   jsonrpc: '2.0',
-                  result: {
-                    content: [
-                      {
-                        type: 'text',
-                        text: JSON.stringify(result, null, 2)
-                      }
-                    ]
-                  },
+                  result: mcpResult,
                   id: jsonRpcRequest.id
                 };
               } catch (error) {
