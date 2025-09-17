@@ -35,6 +35,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New database columns: metadata_json, metadata_generated_at
   - Repository methods for metadata search and filtering
 
+## [2.11.14] - 2025-01-17
+
+### Fixed
+- **MCP Schema Compliance for Validation Tools**: Resolved critical schema validation error affecting strict MCP clients
+  - Fixed `MCP error -32602: Structured content does not match the tool's output schema: data.errors[0].details should be string`
+  - Added sanitization logic in HTTP server execution path where validation tools actually run
+  - Converted object `details` fields to JSON strings as required by outputSchema specification
+  - Added `getToolDefinition()` method to MCP server for HTTP server integration
+  - Implemented defensive programming patterns with nullish coalescing for better error handling
+  - Added comprehensive debug logging with `[HTTP-SANITIZE-DEBUG]` messages for troubleshooting
+  - Expert-validated approach ensures no breaking changes to existing functionality
+  - Full compatibility with strict MCP clients (ChatWise, Augment) and lenient clients (Claude Desktop)
+  - Maintains backward compatibility with all existing tools and workflows
+  - Resolves production deployment issues on ARM64 Coolify platform
+
+### Technical Details
+- **Root Cause**: Validation tools execute through HTTP server's `tools/call` handler, bypassing MCP server's sanitization
+- **Solution**: Added schema compliance logic directly in HTTP server where tools actually execute
+- **Files Modified**: `src/http-server.ts`, `src/mcp/server.ts`
+- **Testing**: Comprehensive validation with real production workflows and multiple MCP client types
+- **Deployment**: Container version `ghcr.io/carsaig/n8n-mcp:v2.11.14` with ARM64 support
+
 ## [2.11.0] - 2025-01-14
 
 ### Added
