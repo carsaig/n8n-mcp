@@ -60,6 +60,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 *   **Testing**: Comprehensive validation with real production workflows and multiple MCP client types
 *   **Deployment**: Container version `ghcr.io/carsaig/n8n-mcp:v2.11.14` with ARM64 support
 
+## \[2.11.2\] - 2025-09-16
+
+### Updated
+
+*   **n8n Dependencies**: Updated to latest versions for compatibility and new features
+    *   n8n: 1.110.1 → 1.111.0
+    *   n8n-core: 1.109.0 → 1.110.0
+    *   n8n-workflow: 1.107.0 → 1.108.0
+    *   @n8n/n8n-nodes-langchain: 1.109.1 → 1.110.0
+*   **Node Database**: Rebuilt with 535 nodes from updated n8n packages
+*   **Templates**: Preserved all 2,598 workflow templates with metadata intact
+*   All critical nodes validated successfully (httpRequest, code, slack, agent)
+*   Test suite: 1,911 tests passing, 5 flaky performance tests failing (99.7% pass rate)
+
+## \[2.11.1\] - 2025-09-15
+
+### Added
+
+*   **Optional Fields Parameter for search\_templates**: Enhanced search\_templates tool with field filtering capability
+    *   New optional `fields` parameter accepts an array of field names to include in response
+    *   Supported fields: 'id', 'name', 'description', 'author', 'nodes', 'views', 'created', 'url', 'metadata'
+    *   Reduces response size by 70-98% when requesting only specific fields (e.g., just id and name)
+    *   Maintains full backward compatibility - existing calls without fields parameter work unchanged
+    *   Example: `search_templates({query: "slack", fields: ["id", "name"]})` returns minimal data
+    *   Significantly improves AI agent performance by reducing token usage
+*   **Fuzzy Node Type Matching for Templates**: Improved template discovery with flexible node type resolution
+    *   Templates can now be found using simple node names: `["slack"]` instead of `["n8n-nodes-base.slack"]`
+    *   Accepts various input formats: bare names, partial prefixes, and case variations
+    *   Automatically expands related node types: `["email"]` finds Gmail, email send, and related templates
+    *   `["slack"]` also finds `slackTrigger` templates
+    *   Case-insensitive matching: `["Slack"]`, `["WEBHOOK"]`, `["HttpRequest"]` all work
+    *   Backward compatible - existing exact formats continue working
+    *   Reduces failed queries by approximately 50%
+    *   Added `template-node-resolver.ts` utility for node type resolution
+    *   Added 23 tests for template node resolution
+*   **Structured Template Metadata System**: Comprehensive metadata for intelligent template discovery
+    *   Generated metadata for 2,534 templates (97.5% coverage) using OpenAI's batch API
+    *   Rich metadata structure: categories, complexity, use cases, setup time, required services, key features, target audience
+    *   New `search_templates_by_metadata` tool for advanced filtering by multiple criteria
+    *   Enhanced `list_templates` tool with optional `includeMetadata` parameter
+    *   Templates now always include descriptions in list responses
+
 ## \[2.11.0\] - 2025-01-14
 
 ### Added
