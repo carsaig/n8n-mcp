@@ -249,6 +249,9 @@ export class N8NDocumentationMCPServer {
     // Handle tool execution
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+
+      // ALWAYS-VISIBLE debug to verify this handler is being called
+      process.stderr.write(`[HANDLER-DEBUG] CallToolRequestSchema handler called for tool: ${name} (Node.js ${process.version})\n`);
       
       // Enhanced logging for debugging tool calls
       logger.info('Tool call received - DETAILED DEBUG', {
@@ -296,37 +299,69 @@ export class N8NDocumentationMCPServer {
         }
       }
       
+      // BULLETPROOF FIX: Always set structuredContent for validation tools FIRST
+      // This ensures MCP schema compliance even if validation fails
+      let structuredContent: any = null;
+      if (name.startsWith('validate_')) {
+        // Initialize with empty validation result to ensure schema compliance
+        structuredContent = {
+          isValid: false,
+          errors: [],
+          warnings: [],
+          suggestions: []
+        };
+
+        // Direct stderr write bypasses ALL console management (HTTP mode silencing)
+        process.stderr.write(`[BULLETPROOF-DEBUG] Pre-execution structuredContent initialized for ${name}\n`);
+      }
+
       try {
+        // Enhanced debug logging with Node.js version info
+        process.stderr.write(`[BULLETPROOF-DEBUG] Starting tool execution: ${name} (Node.js ${process.version})\n`);
         logger.debug(`Executing tool: ${name}`, { args: processedArgs });
+
         const result = await this.executeTool(name, processedArgs);
+
+        // Success logging that bypasses console management
+        process.stderr.write(`[BULLETPROOF-DEBUG] Tool ${name} executed successfully\n`);
         logger.debug(`Tool ${name} executed successfully`);
-        
+
         // Ensure the result is properly formatted for MCP
         let responseText: string;
-        let structuredContent: any = null;
-        
+
         try {
-          // For validation tools, check if we should use structured content
+          // For validation tools, update structured content with actual results
           if (name.startsWith('validate_') && typeof result === 'object' && result !== null) {
             // Clean up the result to ensure it matches the outputSchema
             const cleanResult = this.sanitizeValidationResult(result, name);
-            structuredContent = cleanResult;
+            structuredContent = cleanResult; // Update with actual validation results
             responseText = JSON.stringify(cleanResult, null, 2);
+
+            process.stderr.write(`[BULLETPROOF-DEBUG] Updated structuredContent with validation results for ${name}\n`);
           } else {
             responseText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
           }
         } catch (jsonError) {
           logger.warn(`Failed to stringify tool result for ${name}:`, jsonError);
           responseText = String(result);
+
+          // For validation tools, keep the fallback structuredContent
+          if (name.startsWith('validate_')) {
+            process.stderr.write(`[BULLETPROOF-DEBUG] JSON stringify failed, keeping fallback structuredContent for ${name}\n`);
+          }
         }
-        
+
         // Validate response size (n8n might have limits)
         if (responseText.length > 1000000) { // 1MB limit
           logger.warn(`Tool ${name} response is very large (${responseText.length} chars), truncating`);
           responseText = responseText.substring(0, 999000) + '\n\n[Response truncated due to size limits]';
-          structuredContent = null; // Don't use structured content for truncated responses
+
+          // For validation tools, keep structured content even when truncating text
+          if (!name.startsWith('validate_')) {
+            structuredContent = null; // Only clear for non-validation tools
+          }
         }
-        
+
         // Build MCP response with strict schema compliance
         const mcpResponse: any = {
           content: [
@@ -337,26 +372,34 @@ export class N8NDocumentationMCPServer {
           ],
         };
 
-        // For tools with outputSchema, structuredContent is REQUIRED by MCP spec
+        // CRITICAL: For tools with outputSchema, structuredContent is REQUIRED by MCP spec
         // MCP specification: "If the Tool defines an outputSchema, this field MUST be present"
         if (name.startsWith('validate_')) {
-          logger.debug(`Setting structuredContent for ${name}:`, {
-            structuredContentType: typeof structuredContent,
-            structuredContentNull: structuredContent === null,
-            structuredContentUndefined: structuredContent === undefined,
-            structuredContentValue: structuredContent
-          });
-          mcpResponse.structuredContent = structuredContent; // Always set, even if null
+          // Direct stderr write bypasses ALL console management
+          process.stderr.write(`[BULLETPROOF-DEBUG] Setting final structuredContent for ${name}: ${JSON.stringify({
+            type: typeof structuredContent,
+            isNull: structuredContent === null,
+            isUndefined: structuredContent === undefined,
+            hasContent: !!structuredContent
+          })}\n`);
+
+          // ALWAYS set structuredContent for validation tools (MCP requirement)
+          mcpResponse.structuredContent = structuredContent;
         }
 
         return mcpResponse;
       } catch (error) {
+        // Enhanced error logging with Node.js version info
+        process.stderr.write(`[BULLETPROOF-DEBUG] Tool execution failed: ${name} (Node.js ${process.version})\n`);
+        process.stderr.write(`[BULLETPROOF-DEBUG] Error details: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.stderr.write(`[BULLETPROOF-DEBUG] Error stack: ${error instanceof Error ? error.stack : 'No stack trace'}\n`);
+
         logger.error(`Error executing tool ${name}`, error);
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        
+
         // Provide more helpful error messages for common n8n issues
         let helpfulMessage = `Error executing tool ${name}: ${errorMessage}`;
-        
+
         if (errorMessage.includes('required') || errorMessage.includes('missing')) {
           helpfulMessage += '\n\nNote: This error often occurs when the AI agent sends incomplete or incorrectly formatted parameters. Please ensure all required fields are provided with the correct types.';
         } else if (errorMessage.includes('type') || errorMessage.includes('expected')) {
@@ -364,13 +407,14 @@ export class N8NDocumentationMCPServer {
         } else if (errorMessage.includes('Unknown category') || errorMessage.includes('not found')) {
           helpfulMessage += '\n\nNote: The requested resource or category was not found. Please check the available options.';
         }
-        
+
         // For n8n schema errors, add specific guidance
         if (name.startsWith('validate_') && (errorMessage.includes('config') || errorMessage.includes('nodeType'))) {
           helpfulMessage += '\n\nFor validation tools:\n- nodeType should be a string (e.g., "nodes-base.webhook")\n- config should be an object (e.g., {})';
         }
-        
-        return {
+
+        // CRITICAL: Build error response with structuredContent for validation tools
+        const errorResponse: any = {
           content: [
             {
               type: 'text',
@@ -379,6 +423,32 @@ export class N8NDocumentationMCPServer {
           ],
           isError: true,
         };
+
+        // BULLETPROOF: Even on error, validation tools MUST have structuredContent
+        if (name.startsWith('validate_')) {
+          // Provide error-state structured content to maintain MCP schema compliance
+          const errorStructuredContent = {
+            isValid: false,
+            errors: [
+              {
+                type: 'execution_error',
+                message: errorMessage,
+                nodeVersion: process.version,
+                timestamp: new Date().toISOString()
+              }
+            ],
+            warnings: [],
+            suggestions: [
+              'This error may be related to Node.js version compatibility',
+              'Try using a different validation approach or check the input format'
+            ]
+          };
+
+          process.stderr.write(`[BULLETPROOF-DEBUG] Setting error structuredContent for ${name}\n`);
+          errorResponse.structuredContent = errorStructuredContent;
+        }
+
+        return errorResponse;
       }
     });
   }
@@ -2513,9 +2583,14 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
   }
 
   private async validateWorkflow(workflow: any, options?: any): Promise<any> {
+    // Direct stderr write bypasses ALL console management (HTTP mode silencing)
+    process.stderr.write(`[VALIDATE-DEBUG] validateWorkflow method called (Node.js ${process.version})\n`);
+
     await this.ensureInitialized();
     if (!this.repository) throw new Error('Repository not initialized');
-    
+
+    process.stderr.write(`[VALIDATE-DEBUG] Repository initialized successfully\n`);
+
     // Enhanced logging for workflow validation
     logger.info('Workflow validation requested', {
       hasWorkflow: !!workflow,
@@ -2533,47 +2608,86 @@ Full documentation is being prepared. For now, use get_node_essentials for confi
     if (!workflow || typeof workflow !== 'object') {
       return {
         valid: false,
+        summary: {
+          totalNodes: 0,
+          enabledNodes: 0,
+          triggerNodes: 0,
+          validConnections: 0,
+          invalidConnections: 0,
+          expressionsValidated: 0,
+          errorCount: 1,
+          warningCount: 0
+        },
         errors: [{
           node: 'workflow',
           message: 'Workflow must be an object with nodes and connections',
           details: 'Expected format: ' + getWorkflowExampleString()
         }],
-        summary: { errorCount: 1 }
+        warnings: [],
+        suggestions: ['Provide a valid workflow object with nodes array and connections object']
       };
     }
-    
+
     if (!workflow.nodes || !Array.isArray(workflow.nodes)) {
       return {
         valid: false,
+        summary: {
+          totalNodes: 0,
+          enabledNodes: 0,
+          triggerNodes: 0,
+          validConnections: 0,
+          invalidConnections: 0,
+          expressionsValidated: 0,
+          errorCount: 1,
+          warningCount: 0
+        },
         errors: [{
           node: 'workflow',
           message: 'Workflow must have a nodes array',
           details: 'Expected: workflow.nodes = [array of node objects]. ' + getWorkflowExampleString()
         }],
-        summary: { errorCount: 1 }
+        warnings: [],
+        suggestions: ['Add a nodes array to your workflow object']
       };
     }
-    
+
     if (!workflow.connections || typeof workflow.connections !== 'object') {
       return {
         valid: false,
+        summary: {
+          totalNodes: Array.isArray(workflow.nodes) ? workflow.nodes.length : 0,
+          enabledNodes: 0,
+          triggerNodes: 0,
+          validConnections: 0,
+          invalidConnections: 0,
+          expressionsValidated: 0,
+          errorCount: 1,
+          warningCount: 0
+        },
         errors: [{
           node: 'workflow',
           message: 'Workflow must have a connections object',
           details: 'Expected: workflow.connections = {} (can be empty object). ' + getWorkflowExampleString()
         }],
-        summary: { errorCount: 1 }
+        warnings: [],
+        suggestions: ['Add a connections object to your workflow (can be empty: {})']
       };
     }
-    
+
+    process.stderr.write(`[VALIDATE-DEBUG] About to create WorkflowValidator instance\n`);
+
     // Create workflow validator instance
     const validator = new WorkflowValidator(
       this.repository,
       EnhancedConfigValidator
     );
-    
+
+    process.stderr.write(`[VALIDATE-DEBUG] WorkflowValidator created successfully\n`);
+
     try {
+      process.stderr.write(`[VALIDATE-DEBUG] About to call validator.validateWorkflow\n`);
       const result = await validator.validateWorkflow(workflow, options);
+      process.stderr.write(`[VALIDATE-DEBUG] validator.validateWorkflow completed successfully\n`);
       
       // Format the response for better readability
       const response: any = {
