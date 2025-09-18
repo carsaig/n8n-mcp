@@ -29,19 +29,34 @@ jobs:
             const file = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
             const lines = file.split(/\r?\n/);
 
-            const protectedPaths = [];
+            // Parse customizations into items with protection + paths
+            const items = [];
+            let inCustomizations = false;
             let inPaths = false;
+            let current = null;
             for (const line of lines) {
-              if (/^\s*paths:\s*$/.test(line)) { inPaths = true; continue; }
-              if (inPaths) {
+              if (/^\s*customizations:\s*$/.test(line)) { inCustomizations = true; continue; }
+              if (/^\s*tracked_deltas:\s*$/.test(line)) { inCustomizations = false; inPaths = false; current = null; continue; }
+              if (inCustomizations && /^\s*-\s+id:\s*(\S+)/.test(line)) {
+                current = { id: RegExp.$1, protection: 'soft-guard', paths: [] };
+                items.push(current);
+                inPaths = false; continue;
+              }
+              if (inCustomizations && /^\s*protection:\s*(\S+)/.test(line)) {
+                if (current) current.protection = RegExp.$1.trim();
+                continue;
+              }
+              if (inCustomizations && /^\s*paths:\s*$/.test(line)) { inPaths = true; continue; }
+              if (inCustomizations && inPaths) {
                 if (/^\s*-\s+/.test(line)) {
                   const p = line.replace(/^\s*-\s+/, '').trim();
-                  if (p && !p.startsWith('#')) protectedPaths.push(p);
-                } else if (/^\S/.test(line)) {
-                  inPaths = false;
-                }
+                  if (p && !p.startsWith('#') && current) current.paths.push(p);
+                } else if (/^\S/.test(line)) { inPaths = false; }
               }
             }
+
+            const requireLabelPaths = items.flatMap(it => it.protection === 'block_changes_without_label' ? it.paths : []);
+            const softGuardPaths    = items.flatMap(it => it.protection === 'soft-guard' ? it.paths : []);
 
             // List changed files in this PR via API
             const pr = context.payload.pull_request;
@@ -62,11 +77,23 @@ jobs:
               return file === pattern;
             }
 
-            const hits = [];
+            const hitsRequire = [];
+            const hitsSoft = [];
             for (const file of changed) {
-              for (const pat of protectedPaths) {
-                if (matches(pat, file)) { hits.push(file); break; }
+              for (const pat of requireLabelPaths) {
+                if (matches(pat, file)) { hitsRequire.push(file); break; }
               }
+              for (const pat of softGuardPaths) {
+                if (matches(pat, file)) { hitsSoft.push(file); break; }
+              }
+            }
+
+            if (hitsSoft.length) {
+              core.warning(`Soft-guard paths changed: ${hitsSoft.join(', ')}`);
+            }
+
+            if (hitsRequire.length && !hasLabel) {
+              core.setFailed(`Protected paths changed without label 'customization-change': ${hitsRequire.join(', ')}`);
             }
 
             core.info(`Protected paths: ${JSON.stringify(protectedPaths)}`);
