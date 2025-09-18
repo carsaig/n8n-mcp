@@ -43,7 +43,7 @@ customizations:
     description: Required checks workflow for lint/test/build gating
     paths:
       - .github/workflows/required-checks.yml
-    protection: block_changes_without_label  # needs label: customization-change
+    protection: require_review  # CODEOWNERS review required; no label needed
     checksums:
       .github/workflows/required-checks.yml: a714a648cfae5649f610d0964fffb3d64adb8979e6abca6b78b2ea89a1d50137
 
@@ -51,7 +51,7 @@ customizations:
     description: Automated upstream sync workflow PR creation and gating
     paths:
       - .github/workflows/upstream-sync.yml
-    protection: block_changes_without_label
+    protection: require_review
     checksums:
       .github/workflows/upstream-sync.yml: 99aee683db0d43445058163fb4c960782646a978e1fe46a2093a93fde8f056f9
 
