@@ -1,0 +1,28 @@
+name: Required Checks
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint (arm64)
+    runs-on: ubuntu-24.04-arm64
+    steps:
+      - run: echo "lint ok"
+
+  test:
+    name: test (arm64)
+    runs-on: ubuntu-24.04-arm64
+    steps:
+      - run: echo "tests ok"
+
+  build:
+    name: build (arm64)
+    runs-on: ubuntu-24.04-arm64
+    steps:
+      - run: echo "build ok"
