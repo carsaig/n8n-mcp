@@ -52,24 +52,33 @@ jobs:
         id: prep
         if: steps.latest.outputs.tag != ''
         run: |
-          set -e
+          set -euo pipefail
           git remote add upstream "${UPSTREAM_URL}" || true
-          git fetch upstream --prune --tags
+          # Fetch only the tag we care about without creating/overwriting local tags
           TAG="${{ steps.latest.outputs.tag }}"
-          # Ensure the release tag is available locally
-          git fetch upstream "refs/tags/${TAG}:refs/tags/${TAG}" || true
-          # Determine if the release tag commit is already in origin/main
+          # Get the commit SHA the upstream tag points to (peeled to commit)
+          OID=$(git ls-remote --tags upstream "${TAG}^{}" | awk '{print $1}')
+          if [[ -z "${OID}" ]]; then
+            # Fallback: try non-peeled ref and then peel locally
+            RAW=$(git ls-remote --tags upstream "${TAG}" | awk '{print $1}' | head -n1)
+            if [[ -z "${RAW}" ]]; then
+              echo "Unable to resolve upstream tag ${TAG}" >&2
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            OID="${RAW}"
+          fi
+          # Determine if that commit is already in origin/main
           git fetch origin main
-          TAG_COMMIT="$(git rev-list -n 1 "${TAG}")"
-          if git merge-base --is-ancestor "${TAG_COMMIT}" origin/main; then
+          if git merge-base --is-ancestor "${OID}" origin/main; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           BRANCH="chore/upstream-sync-${TAG}"
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-          # Create branch at upstream release tag to open a PR against our main
-          git checkout -B "${BRANCH}" "${TAG}"
+          # Create branch at the upstream tag commit without importing upstream tag into local namespace
+          git checkout -B "${BRANCH}" "${OID}"
 
       - name: Evaluate change status
         id: diffcheck
