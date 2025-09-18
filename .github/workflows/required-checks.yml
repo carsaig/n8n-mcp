@@ -27,6 +27,7 @@ jobs:
             const fs = require('fs');
             const path = require('path');
             const core = require('@actions/core');
+            const { matches } = require('./.github/scripts/match-util.js');
             const yaml = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
             const lines = yaml.split(/\r?\n/);
 
