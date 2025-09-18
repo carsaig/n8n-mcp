@@ -18,6 +18,11 @@ env:
   UPSTREAM_REPO: n8n-mcp
 
 
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: true
+
+
 jobs:
   sync:
     runs-on: ubuntu-latest
