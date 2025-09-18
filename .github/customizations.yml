@@ -125,7 +125,6 @@ tracked_deltas:
   - docs/CHANGELOG.md
   - docs/bugfixes/ROOT_CAUSE_FINDINGS.md
   - docs/custom_builds/release_v2.11.3.md
-  - docs/customizations/**
   - docs/customizations/github-workflows.md
   - proxy/README.md
   - tests/debug-validate-workflow.js

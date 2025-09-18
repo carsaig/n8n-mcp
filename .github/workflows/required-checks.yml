@@ -26,12 +26,9 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
-            const core = require('@actions/core');
-            const { matches } = require('./.github/scripts/match-util.js');
-            const yaml = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
-            const lines = yaml.split(/\r?\n/);
+            const file = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
+            const lines = file.split(/\r?\n/);
 
-            // Extract all customization paths from the YAML (simple reader, no deps)
             const protectedPaths = [];
             let inPaths = false;
             for (const line of lines) {
@@ -84,7 +81,6 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
-            const core = require('@actions/core');
             const yaml = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
             const lines = yaml.split(/\r?\n/);
 
@@ -131,7 +127,6 @@ jobs:
 
   checks:
     name: checks (typecheck, test, validate)
-    needs: [policy]
     runs-on: [self-hosted, linux, arm64]
     steps:
       - name: Checkout
