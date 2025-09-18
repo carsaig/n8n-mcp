@@ -34,6 +34,6 @@
       "@tests/*": ["tests/*"]
     }
   },
-  "include": ["src/**/*", "tests/**/*", "vitest.config.ts", "types/**/*"],
+  "include": ["src/**/*", "vitest.config.ts", "types/**/*"],
   "exclude": ["node_modules", "dist"]
 }
