@@ -74,8 +74,13 @@ jobs:
             });
             const changed = files.map(f => f.filename);
 
-            // Has required label?
-            const hasLabel = (pr.labels || []).some(l => /customization-change/i.test(l.name));
+            // Has required label? (fetch fresh PR to avoid stale event payload)
+            const { data: prData } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+            const hasLabel = (prData.labels || []).some(l => /customization-change/i.test(l.name));
 
             // Simple glob matcher: only supports exact path or prefix with ** at end
             function matches(pattern, file) {
