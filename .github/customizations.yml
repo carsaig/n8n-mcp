@@ -108,6 +108,13 @@ customizations:
       package.json: ccd591d75db0d6fe5561ed74c97a6e8f4ce633c20199d9836a9aafbcff5e89cc
       renovate.json: c8cf22208ebef36dca5dbb2ed03898d5ca1d45eeea9e5862b6a8dd0d391b5070
 
+
+  - id: docs-customizations
+    description: Documentation for customizations and workflows
+    paths:
+      - docs/customizations/**
+    protection: soft-guard
+
 # Additional files that differ from upstream and should be tracked (globs allowed).
 # These do not necessarily block, but they form the surface for impact analysis.
 tracked_deltas:
@@ -118,6 +125,8 @@ tracked_deltas:
   - docs/CHANGELOG.md
   - docs/bugfixes/ROOT_CAUSE_FINDINGS.md
   - docs/custom_builds/release_v2.11.3.md
+  - docs/customizations/**
+  - docs/customizations/github-workflows.md
   - proxy/README.md
   - tests/debug-validate-workflow.js
   - tests/test-mcp-fix.js

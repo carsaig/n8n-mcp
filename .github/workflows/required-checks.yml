@@ -7,22 +7,151 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
-  lint:
-    name: lint (arm64 self-hosted)
+  policy:
+    name: policy (protect customizations)
     runs-on: [self-hosted, linux, arm64]
+    if: github.event_name == 'pull_request'
     steps:
-      - run: echo "lint ok"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  test:
-    name: test (arm64 self-hosted)
-    runs-on: [self-hosted, linux, arm64]
-    steps:
-      - run: echo "tests ok"
+      - name: Enforce protected paths via manifest
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const core = require('@actions/core');
+            const yaml = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
+            const lines = yaml.split(/\r?\n/);
 
-  build:
-    name: build (arm64 self-hosted)
+            // Extract all customization paths from the YAML (simple reader, no deps)
+            const protectedPaths = [];
+            let inPaths = false;
+            for (const line of lines) {
+              if (/^\s*paths:\s*$/.test(line)) { inPaths = true; continue; }
+              if (inPaths) {
+                if (/^\s*-\s+/.test(line)) {
+                  const p = line.replace(/^\s*-\s+/, '').trim();
+                  if (p && !p.startsWith('#')) protectedPaths.push(p);
+                } else if (/^\S/.test(line)) {
+                  inPaths = false;
+                }
+              }
+            }
+
+            // List changed files in this PR via API
+            const pr = context.payload.pull_request;
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 300,
+            });
+            const changed = files.map(f => f.filename);
+
+            // Has required label?
+            const hasLabel = (pr.labels || []).some(l => /customization-change/i.test(l.name));
+
+            // Simple glob matcher: only supports exact path or prefix with ** at end
+            function matches(pattern, file) {
+              if (pattern.endsWith('/**')) return file.startsWith(pattern.slice(0, -3));
+              return file === pattern;
+            }
+
+            const hits = [];
+            for (const file of changed) {
+              for (const pat of protectedPaths) {
+                if (matches(pat, file)) { hits.push(file); break; }
+              }
+            }
+
+            core.info(`Protected paths: ${JSON.stringify(protectedPaths)}`);
+            core.info(`Changed files: ${JSON.stringify(changed)}`);
+            if (hits.length && !hasLabel) {
+              core.setFailed(`Protected paths changed without label 'customization-change': ${hits.join(', ')}`);
+            }
+
+      - name: Impact analysis (informational)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const core = require('@actions/core');
+            const yaml = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
+            const lines = yaml.split(/\r?\n/);
+
+            const impactPatterns = [];
+            const tracked = [];
+            let inImpact = false;
+            let inTracked = false;
+            for (const line of lines) {
+              if (/^\s*impact_watch:\s*$/.test(line)) { inImpact = true; continue; }
+              if (/^\s*tracked_deltas:\s*$/.test(line)) { inTracked = true; inImpact = false; continue; }
+              if (inImpact || inTracked) {
+                if (/^\s*-\s+/.test(line)) {
+                  const p = line.replace(/^\s*-\s+/, '').trim();
+                  if (p && !p.startsWith('#')) (inImpact ? impactPatterns : tracked).push(p);
+                } else if (/^\S/.test(line)) {
+                  inImpact = false; inTracked = false;
+                }
+              }
+            }
+
+            // PR changed files
+            const pr = context.payload.pull_request;
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 300,
+            });
+            const changed = files.map(f => f.filename);
+
+            function matches(pattern, file) {
+              if (pattern.endsWith('/**')) return file.startsWith(pattern.slice(0, -3));
+              return file === pattern;
+            }
+            const impactHits = [];
+            for (const file of changed) {
+              for (const pat of [...impactPatterns, ...tracked]) {
+                if (matches(pat, file)) { impactHits.push(file); break; }
+              }
+            }
+            core.info(`Impact patterns: ${JSON.stringify(impactPatterns)}; tracked: ${JSON.stringify(tracked)}`);
+            core.info(`Impact hits: ${JSON.stringify(impactHits)}`);
+            core.exportVariable('IMPACT_HITS', impactHits.join(','));
+
+  checks:
+    name: checks (typecheck, test, validate)
+    needs: [policy]
     runs-on: [self-hosted, linux, arm64]
     steps:
-      - run: echo "build ok"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test -- --run
+
+      - name: Workflow validators
+        run: npm run validate
