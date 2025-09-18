@@ -43,7 +43,7 @@ customizations:
     description: Required checks workflow for lint/test/build gating
     paths:
       - .github/workflows/required-checks.yml
-    protection: block_changes_without_label  # needs label: customization-change
+    protection: require_review  # CODEOWNERS review required; no label needed
     checksums:
       .github/workflows/required-checks.yml: a714a648cfae5649f610d0964fffb3d64adb8979e6abca6b78b2ea89a1d50137
 
@@ -51,7 +51,7 @@ customizations:
     description: Automated upstream sync workflow PR creation and gating
     paths:
       - .github/workflows/upstream-sync.yml
-    protection: block_changes_without_label
+    protection: require_review
     checksums:
       .github/workflows/upstream-sync.yml: 99aee683db0d43445058163fb4c960782646a978e1fe46a2093a93fde8f056f9
 
@@ -108,6 +108,13 @@ customizations:
       package.json: ccd591d75db0d6fe5561ed74c97a6e8f4ce633c20199d9836a9aafbcff5e89cc
       renovate.json: c8cf22208ebef36dca5dbb2ed03898d5ca1d45eeea9e5862b6a8dd0d391b5070
 
+
+  - id: docs-customizations
+    description: Documentation for customizations and workflows
+    paths:
+      - docs/customizations/**
+    protection: soft-guard
+
 # Additional files that differ from upstream and should be tracked (globs allowed).
 # These do not necessarily block, but they form the surface for impact analysis.
 tracked_deltas:
@@ -118,6 +125,7 @@ tracked_deltas:
   - docs/CHANGELOG.md
   - docs/bugfixes/ROOT_CAUSE_FINDINGS.md
   - docs/custom_builds/release_v2.11.3.md
+  - docs/customizations/github-workflows.md
   - proxy/README.md
   - tests/debug-validate-workflow.js
   - tests/test-mcp-fix.js

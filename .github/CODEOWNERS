@@ -1,0 +1,28 @@
+# CODEOWNERS – require explicit review for protected customizations
+# Patterns are evaluated from top to bottom. Owners must be GitHub users or teams.
+
+# Workflows that gate or synchronize the fork
+/.github/workflows/required-checks.yml   @carsaig
+/.github/workflows/upstream-sync.yml     @carsaig
+
+# Customizations manifest and docs
+/.github/customizations.yml              @carsaig
+/docs/customizations/**                  @carsaig
+
+# MCP protocol/schema compliance fixes and tests
+/src/mcp/server.ts                       @carsaig
+/src/http-server.ts                      @carsaig
+/tests/unit/mcp/schema-compliance-fix.test.ts  @carsaig
+
+# Container & deployment customizations
+/Dockerfile                              @carsaig
+/docker-compose.coolify.yml              @carsaig
+
+# Proxy customization
+/proxy/cloudflare_worker.js              @carsaig
+
+# Repo operations shaping fork behavior
+/docs/bugfixes/bugfixes.md               @carsaig
+/package.json                            @carsaig
+/renovate.json                           @carsaig
+

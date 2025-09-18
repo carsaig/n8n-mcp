@@ -65,7 +65,6 @@ jobs:
 
             // List changed files in this PR via API
             const pr = context.payload.pull_request;
-            if (!pr) { core.info('No PR context, skipping'); return; }
             const { data: files } = await github.rest.pulls.listFiles({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -74,13 +73,8 @@ jobs:
             });
             const changed = files.map(f => f.filename);
 
-            // Has required label? (fetch fresh PR to avoid stale event payload)
-            const { data: prData } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pr.number,
-            });
-            const hasLabel = (prData.labels || []).some(l => /customization-change/i.test(l.name));
+            // Has required label?
+            const hasLabel = (pr.labels || []).some(l => /customization-change/i.test(l.name));
 
             // Simple glob matcher: only supports exact path or prefix with ** at end
             function matches(pattern, file) {
@@ -106,6 +100,57 @@ jobs:
             if (hitsRequire.length && !hasLabel) {
               core.setFailed(`Protected paths changed without label 'customization-change': ${hitsRequire.join(', ')}`);
             }
+
+
+      - name: Impact analysis (informational)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const yaml = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
+            const lines = yaml.split(/\r?\n/);
+
+            const impactPatterns = [];
+            const tracked = [];
+            let inImpact = false;
+            let inTracked = false;
+            for (const line of lines) {
+              if (/^\s*impact_watch:\s*$/.test(line)) { inImpact = true; continue; }
+              if (/^\s*tracked_deltas:\s*$/.test(line)) { inTracked = true; inImpact = false; continue; }
+              if (inImpact || inTracked) {
+                if (/^\s*-\s+/.test(line)) {
+                  const p = line.replace(/^\s*-\s+/, '').trim();
+                  if (p && !p.startsWith('#')) (inImpact ? impactPatterns : tracked).push(p);
+                } else if (/^\S/.test(line)) {
+                  inImpact = false; inTracked = false;
+                }
+              }
+            }
+
+            // PR changed files
+            const pr = context.payload.pull_request;
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 300,
+            });
+            const changed = files.map(f => f.filename);
+
+            function matches(pattern, file) {
+              if (pattern.endsWith('/**')) return file.startsWith(pattern.slice(0, -3));
+              return file === pattern;
+            }
+            const impactHits = [];
+            for (const file of changed) {
+              for (const pat of [...impactPatterns, ...tracked]) {
+                if (matches(pat, file)) { impactHits.push(file); break; }
+              }
+            }
+            core.info(`Impact patterns: ${JSON.stringify(impactPatterns)}; tracked: ${JSON.stringify(tracked)}`);
+            core.info(`Impact hits: ${JSON.stringify(impactHits)}`);
+            core.exportVariable('IMPACT_HITS', impactHits.join(','));
 
   checks:
     name: checks (typecheck, test, validate)
@@ -136,5 +181,3 @@ jobs:
 
       - name: Workflow validators
         run: npm run validate
-
-
