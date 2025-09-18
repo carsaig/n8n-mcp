@@ -1,0 +1,149 @@
+# Fork customizations manifest for protection and impact-aware checks
+# This file is consumed by CI workflows to prevent accidental overwrite by upstream syncs
+# and to require focused review/validation when upstream changes could affect fork-specific logic.
+
+version: 1
+upstream:
+  remote: upstream
+  branch: main
+
+# High-level policies the workflow should implement
+policies:
+  # Block direct changes to protected custom paths unless explicitly acknowledged
+  - id: block-protected-without-ack
+    description: Block PRs that modify protected paths unless the required label is present
+    required_label: customization-change
+
+  # Require full validation when upstream changes intersect with impact watch sets
+  - id: require-validation-on-impact
+    description: If upstream changes impact protected areas (directly or via dependencies), run checks and require approval
+    required_checks: [typecheck, unit-tests, workflow-validators]
+    required_reviewers: ["@carsaig"]
+
+# Checks the workflow should run (names referenced by policies)
+checks:
+  typecheck:
+    run: npm run typecheck
+  unit-tests:
+    run: npm test -- --run
+  workflow-validators:
+    run: npm run validate
+
+# Files/folders that we intentionally mirror from upstream and keep isolated
+mirrors:
+  # Upstream workflows are stored under a separate folder to avoid collisions with custom workflows
+  upstream_workflows:
+    source_hint: .github/workflows/* from upstream
+    path: .github/workflows/upstream-workflows/**
+    policy: overwrite_on_sync  # upstream wins here; we do not protect these
+
+# Core list of customizations with protection and impact watch definitions
+customizations:
+  - id: workflows-required-checks
+    description: Required checks workflow for lint/test/build gating
+    paths:
+      - .github/workflows/required-checks.yml
+    protection: block_changes_without_label  # needs label: customization-change
+    checksums:
+      .github/workflows/required-checks.yml: a714a648cfae5649f610d0964fffb3d64adb8979e6abca6b78b2ea89a1d50137
+
+  - id: workflows-upstream-sync
+    description: Automated upstream sync workflow PR creation and gating
+    paths:
+      - .github/workflows/upstream-sync.yml
+    protection: block_changes_without_label
+    checksums:
+      .github/workflows/upstream-sync.yml: 99aee683db0d43445058163fb4c960782646a978e1fe46a2093a93fde8f056f9
+
+  - id: mcp-schema-compliance
+    description: MCP protocol/schema compliance fixes and HTTP execution-path sanitization
+    paths:
+      - src/mcp/server.ts
+      - src/http-server.ts
+      - tests/unit/mcp/schema-compliance-fix.test.ts
+    protection: require_review  # require CODEOWNERS review
+    checksums:
+      src/mcp/server.ts: 8a64619ebbf45a33a1b5939c571a7df3bb2feb931743d276b1371ce848bf555c
+      src/http-server.ts: 7659215486aeba1a118d9e0aa341701962ef95d978240ecad4f0d345c77fc512
+      tests/unit/mcp/schema-compliance-fix.test.ts: 68361be1e7ea8f75cea3cdefe176344436f4c68af72bcb8a6412eb0b6a999937
+    impact_watch:
+      # If upstream touches these areas, run full validation
+      - src/services/**
+      - src/mcp/**
+      - src/http-server.ts
+
+  - id: docker-arm64-support
+    description: Docker ARM64 platform and compose fixes (Coolify-compatible)
+    paths:
+      - Dockerfile
+      - docker-compose.coolify.yml
+    protection: require_review
+    checksums:
+      Dockerfile: c225c94be8d2dc6a66f939435343cd6f6e1f4be697d93348a46013aa6d9a5bed
+      docker-compose.coolify.yml: d70f434fdbbd97461b47b9688a94f0413e778a62f16021d521455140cb72b4bd
+
+  - id: proxy-cloudflare
+    description: Cloudflare worker proxy for MCP integration
+    paths:
+      - proxy/cloudflare_worker.js
+    protection: require_review
+    checksums:
+      proxy/cloudflare_worker.js: 10aa891a2998422a00191d346f7dd5ec3b296367b27ba31a17cb1040f2c7d6bf
+
+  - id: docs-bugfixes
+    description: Bugfixes documentation that must be updated alongside related code changes
+    paths:
+      - docs/bugfixes/bugfixes.md
+    protection: soft-guard  # warn if changed without related code changes
+    checksums:
+      docs/bugfixes/bugfixes.md: e9593e4ffc2ee2abc1165348d5fc52dfd98e2c975ce43d1d92fc14d1a2d4c287
+
+  - id: repo-ops
+    description: Renovate configuration and package manifest shaping our fork behavior
+    paths:
+      - package.json
+      - renovate.json
+    protection: require_review
+    checksums:
+      package.json: ccd591d75db0d6fe5561ed74c97a6e8f4ce633c20199d9836a9aafbcff5e89cc
+      renovate.json: c8cf22208ebef36dca5dbb2ed03898d5ca1d45eeea9e5862b6a8dd0d391b5070
+
+# Additional files that differ from upstream and should be tracked (globs allowed).
+# These do not necessarily block, but they form the surface for impact analysis.
+tracked_deltas:
+  - .gitignore
+  - AGENTS.md
+  - CLAUDE.md
+  - README.md
+  - docs/CHANGELOG.md
+  - docs/bugfixes/ROOT_CAUSE_FINDINGS.md
+  - docs/custom_builds/release_v2.11.3.md
+  - proxy/README.md
+  - tests/debug-validate-workflow.js
+  - tests/test-mcp-fix.js
+  - tests/test-mcp-protocol.js
+  - tests/test-production-validation.js
+  - tests/test-validate-direct.js
+  - .github/customizations.yml
+  - .github/workflows/required-checks.yml
+  - .github/workflows/upstream-sync.yml
+
+# How the workflow should use this manifest (reference behavior)
+workflow_guidance:
+  - step: collect-change-set
+    details:
+      - compute changed files in the PR
+      - compute upstream impact area (diff upstream/main...HEAD on sync PRs)
+  - step: enforce-protected
+    details:
+      - if any "customizations[].paths" changed and PR lacks label "customization-change", fail with policy block-protected-without-ack
+      - always require review from @carsaig for "protection: require_review"
+  - step: impact-analysis
+    details:
+      - if upstream changes intersect with any customization impact_watch sets or tracked_deltas, run checks: [typecheck, unit-tests, workflow-validators]
+      - if checks fail → block; if pass → allow merge
+  - step: integrity-hints
+    details:
+      - compare file checksums when provided; if drift detected and path not in PR changes, fail with guidance (possible merge artifact)
+      - checksum failures should be warn-by-default except for workflows and core MCP files
+
