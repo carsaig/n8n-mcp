@@ -126,6 +126,9 @@ jobs:
       - name: Unit tests (temporarily skipped)
         run: echo "Skipping unit tests in CI for stability; running typecheck + validate only"
 
+      - name: Build
+        run: npm run build
+
       - name: Workflow validators
         run: npm run validate
 
