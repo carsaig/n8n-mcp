@@ -3,8 +3,8 @@ name: Upstream Sync
 on:
   workflow_dispatch: {}
   schedule:
-    # Weekdays 07:00 UTC ≈ 09:00 Europe/Berlin (Renovate window-friendly)
-    - cron: "0 7 * * 1-5"
+    # Daily 12:00 CET (fixed at 11:00 UTC year-round)
+    - cron: "0 11 * * *"
 
 permissions:
   contents: write
@@ -14,6 +14,9 @@ env:
   UPSTREAM_URL: https://github.com/czlonkowski/n8n-mcp.git   # ← replace
   UPSTREAM_BRANCH: main                                      # ← replace if different
   SYNC_BRANCH: chore/upstream-sync
+  UPSTREAM_OWNER: czlonkowski
+  UPSTREAM_REPO: n8n-mcp
+
 
 jobs:
   sync:
@@ -25,46 +28,69 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Add upstream and fetch
-        run: |
-          git remote add upstream "${UPSTREAM_URL}" || true
-          git fetch upstream --prune
-          git checkout -B "${SYNC_BRANCH}"
-          # Merge upstream with a merge commit so history is explicit
-          git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}" || true
+      - name: Ensure jq is available
+        run: sudo apt-get update -y && sudo apt-get install -y jq
 
-      - name: No changes? Exit early
-        id: diffcheck
+      - name: Resolve latest upstream release tag
+        id: latest
         run: |
-          if git diff --quiet HEAD "upstream/${UPSTREAM_BRANCH}"; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
-            echo "changed=true" >> $GITHUB_OUTPUT
+          set -e
+          TAG=$(curl -sL "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest" | jq -r '.tag_name')
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "No release tag found" >&2
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare sync branch from latest release tag
+        id: prep
+        if: steps.latest.outputs.tag != ''
+        run: |
+          set -e
+          git remote add upstream "${UPSTREAM_URL}" || true
+          git fetch upstream --prune --tags
+          TAG="${{ steps.latest.outputs.tag }}"
+          # Ensure the release tag is available locally
+          git fetch upstream "refs/tags/${TAG}:refs/tags/${TAG}" || true
+          # Determine if the release tag commit is already in origin/main
+          git fetch origin main
+          TAG_COMMIT="$(git rev-list -n 1 "${TAG}")"
+          if git merge-base --is-ancestor "${TAG_COMMIT}" origin/main; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BRANCH="chore/upstream-sync-${TAG}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          # Create branch at upstream release tag to open a PR against our main
+          git checkout -B "${BRANCH}" "${TAG}"
+
+      - name: Evaluate change status
+        id: diffcheck
+        if: steps.latest.outputs.tag != ''
+        run: |
+          echo "changed=${{ steps.prep.outputs.changed }}" >> "$GITHUB_OUTPUT"
 
       - name: Push sync branch
         if: steps.diffcheck.outputs.changed == 'true'
         run: |
-          git push -u origin "${SYNC_BRANCH}"
+          git push -u origin "${{ steps.prep.outputs.branch }}"
 
       - name: Create or update PR
+        id: cpr
         if: steps.diffcheck.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
-          branch: ${{ env.SYNC_BRANCH }}
-          title: "chore: sync from upstream/${{ env.UPSTREAM_BRANCH }}"
+          branch: ${{ steps.prep.outputs.branch }}
+          title: "chore: sync upstream release ${{ steps.latest.outputs.tag }}"
           body: |
-            This PR merges changes from **${{ env.UPSTREAM_URL }}** (`${{ env.UPSTREAM_BRANCH }}`) into this repo.
+            This PR merges upstream release `${{ steps.latest.outputs.tag }}` from **${{ env.UPSTREAM_URL }}** into this repo.
 
             - CI must be green (branch protection enforces this).
-            - Renovate will propose any follow-up dependency bumps on top (normal flow).
           labels: |
             dependencies
             upstream-sync
-          reviewers: |
-            czlonkowski
-          assignees: |
-            czlonkowski
           signoff: true
           delete-branch: false
 
@@ -72,5 +98,5 @@ jobs:
         if: steps.diffcheck.outputs.changed == 'true'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
-          pull-request-number: ${{ steps.create_pull_request.outputs.pull-request-number }}
+          pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
           merge-method: squash
