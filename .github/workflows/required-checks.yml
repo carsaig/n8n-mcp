@@ -10,19 +10,19 @@ permissions:
 
 jobs:
   lint:
-    name: lint (temp x64)
-    runs-on: ubuntu-24.04
+    name: lint (arm64)
+    runs-on: ubuntu-24.04-arm64
     steps:
       - run: echo "lint ok"
 
   test:
-    name: test (temp x64)
-    runs-on: ubuntu-24.04
+    name: test (arm64)
+    runs-on: ubuntu-24.04-arm64
     steps:
       - run: echo "tests ok"
 
   build:
-    name: build (temp x64)
-    runs-on: ubuntu-24.04
+    name: build (arm64)
+    runs-on: ubuntu-24.04-arm64
     steps:
       - run: echo "build ok"
