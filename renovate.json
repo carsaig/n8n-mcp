@@ -1,41 +1,55 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:base"
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    ":separateMultipleMajorReleases",
+    ":enableVulnerabilityAlerts"
   ],
-  "schedule": ["after 9am on monday"],
+
   "timezone": "UTC",
+  "schedule": ["after 9am on monday"],
+
+  "labels": ["dependencies", "n8n-update"],
+  "assignees": ["@czlonkowski"],
+  "reviewers": ["@czlonkowski"],
+  "prCreation": "immediate",
+  "prConcurrentLimit": 1,
+  "prHourlyLimit": 2,
+
+  "commitMessagePrefix": "chore: ",
+  "commitMessageTopic": "{{depName}}",
+  "commitMessageExtra": "from {{currentVersion}} to {{newVersion}}",
+
+  "postUpdateOptions": ["npmDedupe"],
+
   "packageRules": [
     {
-      "description": "Group all n8n-related updates",
+      "description": "Group and automerge safe n8n updates",
       "groupName": "n8n dependencies",
       "matchPackagePatterns": ["^n8n", "^@n8n/"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
       "schedule": ["after 9am on monday"]
     },
     {
       "description": "Require approval for major n8n updates",
       "matchPackagePatterns": ["^n8n", "^@n8n/"],
       "matchUpdateTypes": ["major"],
-      "dependencyDashboardApproval": true
+      "dependencyDashboardApproval": true,
+      "labels": ["dependencies", "n8n-update", "needs-approval"]
     },
     {
-      "description": "Disable updates for other dependencies",
+      "description": "Keep other dependencies enabled (but no automerge yet)",
       "excludePackagePatterns": ["^n8n", "^@n8n/"],
-      "enabled": false
+      "enabled": true,
+      "automerge": false
     }
   ],
-  "postUpdateOptions": [
-    "npmDedupe"
-  ],
-  "prConcurrentLimit": 1,
-  "prCreation": "immediate",
-  "labels": ["dependencies", "n8n-update"],
-  "assignees": ["@czlonkowski"],
-  "reviewers": ["@czlonkowski"],
-  "commitMessagePrefix": "chore: ",
-  "commitMessageTopic": "{{depName}}",
-  "commitMessageExtra": "from {{currentVersion}} to {{newVersion}}",
+
   "prBodyDefinitions": {
     "Package": "{{depName}}",
     "Type": "{{depType}}",
