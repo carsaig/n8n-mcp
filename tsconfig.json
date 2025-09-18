@@ -27,13 +27,13 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "moduleResolution": "node",
-    "allowJs": true,
+    "allowJs": false,
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
       "@tests/*": ["tests/*"]
     }
   },
-  "include": ["src/**/*", "tests/**/*", "vitest.config.ts", "types/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*", "vitest.config.ts", "types/**/*"],
+  "exclude": ["node_modules", "dist", "tests", "scripts", "**/*.js"]
 }

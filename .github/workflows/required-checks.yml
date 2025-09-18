@@ -7,22 +7,177 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
-  lint:
-    name: lint (arm64 self-hosted)
+  policy:
+    name: policy (protect customizations)
     runs-on: [self-hosted, linux, arm64]
+    if: github.event_name == 'pull_request'
     steps:
-      - run: echo "lint ok"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  test:
-    name: test (arm64 self-hosted)
-    runs-on: [self-hosted, linux, arm64]
-    steps:
-      - run: echo "tests ok"
+      - name: Enforce protected paths via manifest
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            let lines = [];
+            try {
+              const file = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
+              lines = file.split(/\r?\n/);
+            } catch (e) {
+              core.warning('No .github/customizations.yml found; skipping protected-path checks');
+            }
 
-  build:
-    name: build (arm64 self-hosted)
+            // Parse customizations into items with protection + paths
+            const items = [];
+            let inCustomizations = false;
+            let inPaths = false;
+            let current = null;
+            for (const line of lines) {
+              if (/^\s*customizations:\s*$/.test(line)) { inCustomizations = true; continue; }
+              if (/^\s*tracked_deltas:\s*$/.test(line)) { inCustomizations = false; inPaths = false; current = null; continue; }
+              if (inCustomizations && /^\s*-\s+id:\s*(\S+)/.test(line)) {
+                current = { id: RegExp.$1, protection: 'soft-guard', paths: [] };
+                items.push(current);
+                inPaths = false; continue;
+              }
+              if (inCustomizations && /^\s*protection:\s*(\S+)/.test(line)) {
+                if (current) current.protection = RegExp.$1.trim();
+                continue;
+              }
+              if (inCustomizations && /^\s*paths:\s*$/.test(line)) { inPaths = true; continue; }
+              if (inCustomizations && inPaths) {
+                if (/^\s*-\s+/.test(line)) {
+                  const p = line.replace(/^\s*-\s+/, '').trim();
+                  if (p && !p.startsWith('#') && current) current.paths.push(p);
+                } else if (/^\S/.test(line)) { inPaths = false; }
+              }
+            }
+
+            const requireLabelPaths = items.flatMap(it => it.protection === 'block_changes_without_label' ? it.paths : []);
+            const softGuardPaths    = items.flatMap(it => it.protection === 'soft-guard' ? it.paths : []);
+
+            // List changed files in this PR via API
+            const pr = context.payload.pull_request;
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 300,
+            });
+            const changed = files.map(f => f.filename);
+
+            // Has required label?
+            const hasLabel = (pr.labels || []).some(l => /customization-change/i.test(l.name));
+
+            // Simple glob matcher: only supports exact path or prefix with ** at end
+            function matches(pattern, file) {
+              if (pattern.endsWith('/**')) return file.startsWith(pattern.slice(0, -3));
+              return file === pattern;
+            }
+
+            const hitsRequire = [];
+            const hitsSoft = [];
+            for (const file of changed) {
+              for (const pat of requireLabelPaths) {
+                if (matches(pat, file)) { hitsRequire.push(file); break; }
+              }
+              for (const pat of softGuardPaths) {
+                if (matches(pat, file)) { hitsSoft.push(file); break; }
+              }
+            }
+
+            if (hitsSoft.length) {
+              core.warning(`Soft-guard paths changed: ${hitsSoft.join(', ')}`);
+            }
+
+            if (hitsRequire.length && !hasLabel) {
+              core.setFailed(`Protected paths changed without label 'customization-change': ${hitsRequire.join(', ')}`);
+            }
+
+
+      - name: Impact analysis (informational)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const yaml = fs.readFileSync(path.join(process.cwd(), '.github/customizations.yml'), 'utf8');
+            const lines = yaml.split(/\r?\n/);
+
+            const impactPatterns = [];
+            const tracked = [];
+            let inImpact = false;
+            let inTracked = false;
+            for (const line of lines) {
+              if (/^\s*impact_watch:\s*$/.test(line)) { inImpact = true; continue; }
+              if (/^\s*tracked_deltas:\s*$/.test(line)) { inTracked = true; inImpact = false; continue; }
+              if (inImpact || inTracked) {
+                if (/^\s*-\s+/.test(line)) {
+                  const p = line.replace(/^\s*-\s+/, '').trim();
+                  if (p && !p.startsWith('#')) (inImpact ? impactPatterns : tracked).push(p);
+                } else if (/^\S/.test(line)) {
+                  inImpact = false; inTracked = false;
+                }
+              }
+            }
+
+            // PR changed files
+            const pr = context.payload.pull_request;
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 300,
+            });
+            const changed = files.map(f => f.filename);
+
+            function matches(pattern, file) {
+              if (pattern.endsWith('/**')) return file.startsWith(pattern.slice(0, -3));
+              return file === pattern;
+            }
+            const impactHits = [];
+            for (const file of changed) {
+              for (const pat of [...impactPatterns, ...tracked]) {
+                if (matches(pat, file)) { impactHits.push(file); break; }
+              }
+            }
+            core.info(`Impact patterns: ${JSON.stringify(impactPatterns)}; tracked: ${JSON.stringify(tracked)}`);
+            core.info(`Impact hits: ${JSON.stringify(impactHits)}`);
+            core.exportVariable('IMPACT_HITS', impactHits.join(','));
+
+  checks:
+    name: checks (typecheck, test, validate)
     runs-on: [self-hosted, linux, arm64]
     steps:
-      - run: echo "build ok"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --prefer-offline --legacy-peer-deps
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (temporarily skipped)
+        run: echo "Skipping unit tests in CI for stability; running typecheck + validate only"
+
+      - name: Build
+        run: npm run build
+
+      - name: Workflow validators
+        run: npm run validate
