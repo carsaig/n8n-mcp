@@ -98,6 +98,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Start GitHub Deployment
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
+        id: gh_deploy_start
+        uses: bobheadxi/deployments@v1
+        with:
+          step: start
+          token: ${{ secrets.GITHUB_TOKEN }}
+          env: production
+          ref: ${{ github.sha }}
+          description: "Coolify deploy"
+
       - name: Load secrets from 1Password
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
         uses: 1password/load-secrets-action@v2
@@ -116,3 +127,21 @@ jobs:
             -H "Authorization: Bearer ${COOLIFY_API_KEY}" \
             "$COOLIFY_WEBHOOK_URL"
 
+
+      - name: Mark deployment success
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) && success() }}
+        uses: bobheadxi/deployments@v1
+        with:
+          step: finish
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: success
+          deployment_id: ${{ steps.gh_deploy_start.outputs.deployment_id }}
+
+      - name: Mark deployment failure
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) && failure() }}
+        uses: bobheadxi/deployments@v1
+        with:
+          step: finish
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: failure
+          deployment_id: ${{ steps.gh_deploy_start.outputs.deployment_id }}
