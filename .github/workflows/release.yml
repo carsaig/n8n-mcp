@@ -69,6 +69,11 @@ jobs:
           echo "VERSION=${NEXT}" | tee -a "$GITHUB_ENV"
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -78,6 +83,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Start GitHub Deployment
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
+        id: gh_deploy_start
+        uses: bobheadxi/deployments@v1
+        with:
+          step: start
+          token: ${{ secrets.GITHUB_TOKEN }}
+          env: production
+          ref: ${{ github.sha }}
 
       - name: Build and push (ARM64 only)
         uses: docker/build-push-action@v5
@@ -134,6 +149,7 @@ jobs:
         with:
           step: finish
           token: ${{ secrets.GITHUB_TOKEN }}
+          env: production
           status: success
           deployment_id: ${{ steps.gh_deploy_start.outputs.deployment_id }}
 
@@ -143,5 +159,6 @@ jobs:
         with:
           step: finish
           token: ${{ secrets.GITHUB_TOKEN }}
+          env: production
           status: failure
           deployment_id: ${{ steps.gh_deploy_start.outputs.deployment_id }}
