@@ -30,6 +30,9 @@ env:
 jobs:
   release:
     runs-on: [self-hosted, Linux, ARM64]
+    permissions:
+      contents: read
+      packages: write
 
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -80,7 +83,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
 
@@ -92,7 +95,7 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
 
       - name: Echo built image tag
         run: |
@@ -103,6 +106,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: release
     if: ${{ needs.release.result == 'success' }}
+    permissions:
+      contents: write
+      packages: write
     steps:
       - name: Create GitHub Release (auto or custom notes)
         uses: softprops/action-gh-release@v1
@@ -122,7 +128,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           env: production
           ref: ${{ github.sha }}
-          description: "Coolify deploy"
 
       - name: Load secrets from 1Password
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
