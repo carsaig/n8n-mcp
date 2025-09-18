@@ -1,0 +1,76 @@
+name: Upstream Sync
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Weekdays 07:00 UTC ≈ 09:00 Europe/Berlin (Renovate window-friendly)
+    - cron: "0 7 * * 1-5"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_URL: https://github.com/czlonkowski/n8n-mcp.git   # ← replace
+  UPSTREAM_BRANCH: main                                      # ← replace if different
+  SYNC_BRANCH: chore/upstream-sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream "${UPSTREAM_URL}" || true
+          git fetch upstream --prune
+          git checkout -B "${SYNC_BRANCH}"
+          # Merge upstream with a merge commit so history is explicit
+          git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}" || true
+
+      - name: No changes? Exit early
+        id: diffcheck
+        run: |
+          if git diff --quiet HEAD "upstream/${UPSTREAM_BRANCH}"; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push sync branch
+        if: steps.diffcheck.outputs.changed == 'true'
+        run: |
+          git push -u origin "${SYNC_BRANCH}"
+
+      - name: Create or update PR
+        if: steps.diffcheck.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ env.SYNC_BRANCH }}
+          title: "chore: sync from upstream/${{ env.UPSTREAM_BRANCH }}"
+          body: |
+            This PR merges changes from **${{ env.UPSTREAM_URL }}** (`${{ env.UPSTREAM_BRANCH }}`) into this repo.
+
+            - CI must be green (branch protection enforces this).
+            - Renovate will propose any follow-up dependency bumps on top (normal flow).
+          labels: |
+            dependencies
+            upstream-sync
+          reviewers: |
+            czlonkowski
+          assignees: |
+            czlonkowski
+          signoff: true
+          delete-branch: false
+
+      - name: Enable PR auto-merge (squash) once checks pass
+        if: steps.diffcheck.outputs.changed == 'true'
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          pull-request-number: ${{ steps.create_pull_request.outputs.pull-request-number }}
+          merge-method: squash
