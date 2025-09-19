@@ -38,9 +38,13 @@ jobs:
 
       - name: Resolve latest upstream release tag
         id: latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          TAG=$(curl -sL "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest" | jq -r '.tag_name')
+          set -euo pipefail
+          TAG=$(curl -sSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                 -H "Accept: application/vnd.github+json" \
+                 "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest" | jq -r '.tag_name')
           if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
             echo "No release tag found" >&2
             echo "tag=" >> "$GITHUB_OUTPUT"
@@ -54,31 +58,26 @@ jobs:
         run: |
           set -euo pipefail
           git remote add upstream "${UPSTREAM_URL}" || true
-          # Fetch only the tag we care about without creating/overwriting local tags
           TAG="${{ steps.latest.outputs.tag }}"
-          # Get the commit SHA the upstream tag points to (peeled to commit)
-          OID=$(git ls-remote --tags upstream "${TAG}^{}" | awk '{print $1}')
-          if [[ -z "${OID}" ]]; then
-            # Fallback: try non-peeled ref and then peel locally
-            RAW=$(git ls-remote --tags upstream "${TAG}" | awk '{print $1}' | head -n1)
-            if [[ -z "${RAW}" ]]; then
-              echo "Unable to resolve upstream tag ${TAG}" >&2
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            OID="${RAW}"
-          fi
+          TMPBR="_upstream_${TAG}"
+          # Fetch upstream tag commit into a temporary local branch (no local tags created)
+          # This peels annotated tags to commits via ^{commit}
+          git fetch --no-tags upstream "refs/tags/${TAG}^{commit}:refs/heads/${TMPBR}"
           # Determine if that commit is already in origin/main
           git fetch origin main
-          if git merge-base --is-ancestor "${OID}" origin/main; then
+          if git merge-base --is-ancestor "${TMPBR}" origin/main; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
+            # Clean up temp branch
+            git branch -D "${TMPBR}" >/dev/null 2>&1 || true
             exit 0
           fi
           BRANCH="chore/upstream-sync-${TAG}"
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-          # Create branch at the upstream tag commit without importing upstream tag into local namespace
-          git checkout -B "${BRANCH}" "${OID}"
+          # Create branch at the upstream release commit
+          git checkout -B "${BRANCH}" "${TMPBR}"
+          # Clean up temp branch
+          git branch -D "${TMPBR}" >/dev/null 2>&1 || true
 
       - name: Evaluate change status
         id: diffcheck

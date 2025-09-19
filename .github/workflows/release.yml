@@ -182,21 +182,40 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Open PR to update docker-compose.coolify.yml
-        if: steps.bump_compose.outputs.changed == 'true'
+      - name: Bump docs references to image tag
+        id: bump_docs
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${{ needs.release.outputs.version }}"
+          # Only touch references to the carsaig image
+          CHANGED=0
+          if compgen -G "docs/**/*.md" > /dev/null; then
+            # Replace ghcr.io/carsaig/n8n-mcp:<anything> with new ${VER}
+            find docs -type f -name "*.md" -print0 | xargs -0 sed -E -i "s#(ghcr\\.io/carsaig/n8n-mcp:)[^\`\"\)\s]+#\\1${VER}#g"
+            if ! git diff --quiet -- docs; then CHANGED=1; fi
+          fi
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR to update docker-compose.coolify.yml and docs
+        if: steps.bump_compose.outputs.changed == 'true' || steps.bump_docs.outputs.changed == '1'
         uses: peter-evans/create-pull-request@v6
         with:
-          branch: chore/compose-bump-${{ needs.release.outputs.version }}
-          title: "chore(compose): bump docker-compose.coolify to ${{ needs.release.outputs.version }}"
-          commit-message: "chore(compose): bump docker-compose.coolify to ${{ needs.release.outputs.version }}"
+          branch: chore/compose-docs-bump-${{ needs.release.outputs.version }}
+          title: "chore: bump Coolify compose and docs to ${{ needs.release.outputs.version }}"
+          commit-message: "chore: bump docker-compose.coolify and docs to ${{ needs.release.outputs.version }}"
           body: |
-            This PR updates docker-compose.coolify.yml to use image tag `${{ needs.release.outputs.version }}`.
+            This PR updates:
+            - docker-compose.coolify.yml → image tag `${{ needs.release.outputs.version }}`
+            - docs/** → references to `ghcr.io/carsaig/n8n-mcp:<tag>` bumped to `${{ needs.release.outputs.version }}`
 
-            After merging, Coolify deploys will pick up the new version.
+            Merge this PR so Coolify deployments and docs stay in sync with the published image.
           add-paths: |
             docker-compose.coolify.yml
+            docs/**
           labels: |
             deployment
+            documentation
 
       - name: Start GitHub Deployment
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
