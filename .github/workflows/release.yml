@@ -22,6 +22,8 @@ on:
 permissions:
   contents: write
   packages: write
+  pull-requests: write
+  issues: write
 
 env:
   IMAGE_NAME: ghcr.io/carsaig/n8n-mcp
@@ -145,6 +147,8 @@ jobs:
       contents: write
       packages: write
       deployments: write
+      pull-requests: write
+      issues: write
     steps:
       - name: Create GitHub Release (auto or custom notes)
         uses: softprops/action-gh-release@v1
