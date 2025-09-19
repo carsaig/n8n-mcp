@@ -2,7 +2,8 @@ name: Release (ARM64) to GHCR + Coolify
 
 on:
   push:
-    branches: [ main ]
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -66,7 +67,10 @@ jobs:
             return 1
           }
 
-          if [[ -n "${VERSION_INPUT:-}" ]]; then
+          # If this workflow was triggered by a tag push, respect that tag verbatim
+          if [[ "${GITHUB_REF:-}" =~ ^refs/tags/ ]]; then
+            NEXT="${GITHUB_REF#refs/tags/}"
+          elif [[ -n "${VERSION_INPUT:-}" ]]; then
             # Accept vX.Y.Z or vX.Y.Z-cs.N
             if [[ ! "$VERSION_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-cs\.[0-9]+)?$ ]]; then
               echo "Invalid version tag format: ${VERSION_INPUT}. Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-cs.N" >&2
