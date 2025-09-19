@@ -122,3 +122,44 @@ Step 5: Branch cleanup
 *   Keep `required-checks.yml` minimal and deterministic; avoid environment surprises on self-hosted runners
 *   Prefer manifest-driven enforcement over duplicated path lists inside workflows
 *   For non-trivial upstream changes, review impact hits printed by the policy job and expand tests where necessary
+
+## Release Workflow (.github/workflows/release.yml) — updated
+
+Purpose:
+
+- Publish ARM64 image to GHCR with both a versioned tag and latest
+- Create a GitHub Release
+- Open an automation PR to bump docker-compose and docs
+- Auto-generate a release notes file under docs/custom_builds
+- Trigger Coolify deploy and record a GitHub Deployment in the "Coolify" environment
+
+Key behavior:
+
+1) Triggers
+   - push: tags: ['v*'] only (merges to main no longer trigger a release)
+   - workflow_dispatch remains available for manual runs
+2) Version resolution
+   - If triggered by a tag event, the pushed tag is used verbatim (e.g., v2.11.5-cs.2)
+   - Otherwise: optional manual input or automatic -cs.N bump logic
+3) Build & publish
+   - Docker Buildx on self-hosted ARM64
+   - Auth with GHCR_PAT; tags pushed: latest and <version>
+4) Post-publish automation PR
+   - Bumps docker-compose.coolify.yml image tag to <version>
+   - Rewrites docs/** references to ghcr.io/carsaig/n8n-mcp:<version>
+   - Generates docs/custom_builds/release_<version with cs as dots>.md (e.g., release_v2.11.5.cs.2.md)
+5) Deployment & status
+   - Deployments recorded to environment: Coolify
+   - 1Password loads COOLIFY_API_KEY; webhook invoked; success/failure status posted
+
+Runbook (concise):
+
+- Action: push a tag (vX.Y.Z[-cs.N]) or run manually
+- Why: produce release, images, notes, and a sync PR
+- Effect: image is available; PR opened; deployment status posted to "Coolify"
+
+Notes:
+
+- Required Checks still gate PR merges
+- Automation PR labels: deployment, documentation
+- Release notes filename pattern: release_vX.Y.Z.cs.N.md
