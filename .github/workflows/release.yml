@@ -50,27 +50,62 @@ jobs:
           VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          # Helper to extract base/version and cs suffix
+          parse_cs() {
+            local tag="$1"
+            if [[ "$tag" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+)-cs\.([0-9]+)$ ]]; then
+              echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+              return 0
+            fi
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "$tag 0"
+              return 0
+            fi
+            return 1
+          }
+
           if [[ -n "${VERSION_INPUT:-}" ]]; then
-            # Use manual version input
-            if [[ ! "${VERSION_INPUT}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Invalid version tag format: ${VERSION_INPUT}. Expected vMAJOR.MINOR.PATCH" >&2
+            # Accept vX.Y.Z or vX.Y.Z-cs.N
+            if [[ ! "$VERSION_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-cs\.[0-9]+)?$ ]]; then
+              echo "Invalid version tag format: ${VERSION_INPUT}. Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-cs.N" >&2
               exit 1
             fi
-            NEXT="${VERSION_INPUT}"
+            NEXT="$VERSION_INPUT"
           else
-            # Auto bump patch from latest v* tag
-            git fetch --tags --force
+            # Try to detect upstream base from recent merge commits created by upstream-sync
+            BASE=$(git log -n 100 --pretty=%s | grep -Eo 'sync upstream release v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+') || true
+
+            # Get latest existing tag in this repo (could be with or without -cs.N)
             LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)
-            if [[ -z "$LATEST" ]]; then
-              LATEST="v0.0.0"
+
+            if [[ -n "$BASE" ]]; then
+              # Determine highest cs.N for this BASE in existing tags
+              EXISTING=$(git tag -l "${BASE}-cs.*" --sort=-v:refname | head -n1 || true)
+              if [[ -n "$EXISTING" ]]; then
+                read -r _ CSN <<<"$(parse_cs "$EXISTING")"
+                NEXT="${BASE}-cs.$((CSN+1))"
+              else
+                # If we already tagged exactly BASE, start cs.1, else also start cs.1
+                NEXT="${BASE}-cs.1"
+              fi
+            else
+              # No upstream base detected; fall back on latest local tag logic
+              if [[ -z "$LATEST" ]]; then
+                NEXT="v0.0.1-cs.1"
+              else
+                if OUT="$(parse_cs "$LATEST")"; then
+                  read -r BASEONLY CSN <<<"$OUT"
+                  if [[ "$CSN" -gt 0 ]]; then
+                    NEXT="${BASEONLY}-cs.$((CSN+1))"
+                  else
+                    NEXT="${BASEONLY}-cs.1"
+                  fi
+                else
+                  echo "Unexpected latest tag format: $LATEST" >&2
+                  exit 1
+                fi
+              fi
             fi
-            ver="${LATEST#v}"
-            IFS='.' read -r MA MI PA <<<"$ver"
-            if [[ -z "$MA" || -z "$MI" || -z "$PA" ]]; then
-              echo "Unexpected latest tag format: $LATEST" >&2
-              exit 1
-            fi
-            NEXT="v${MA}.${MI}.$((PA+1))"
           fi
           echo "VERSION=${NEXT}" | tee -a "$GITHUB_ENV"
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
@@ -119,6 +154,49 @@ jobs:
           body: ${{ inputs.release_notes }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout repository for compose bump
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump docker-compose.coolify image tag
+        id: bump_compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="docker-compose.coolify.yml"
+          if [[ ! -f "$FILE" ]]; then
+            echo "No $FILE present; skipping compose bump" >&2
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VER="${{ needs.release.outputs.version }}"
+          # Replace the image tag line
+          sed -E -i "s#^(\s*image:\s*ghcr\.io/carsaig/n8n-mcp:).*#\1${VER}#" "$FILE"
+          if git diff --quiet -- "$FILE"; then
+            echo "No changes to $FILE (already at $VER)"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Will bump $FILE to $VER"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR to update docker-compose.coolify.yml
+        if: steps.bump_compose.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/compose-bump-${{ needs.release.outputs.version }}
+          title: "chore(compose): bump docker-compose.coolify to ${{ needs.release.outputs.version }}"
+          commit-message: "chore(compose): bump docker-compose.coolify to ${{ needs.release.outputs.version }}"
+          body: |
+            This PR updates docker-compose.coolify.yml to use image tag `${{ needs.release.outputs.version }}`.
+
+            After merging, Coolify deploys will pick up the new version.
+          add-paths: |
+            docker-compose.coolify.yml
+          labels: |
+            deployment
 
       - name: Start GitHub Deployment
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
