@@ -55,12 +55,12 @@ This release includes critical fixes and improvements over the upstream n8n-MCP 
 ### Docker (Recommended)
 
 ```
-docker pull ghcr.io/carsaig/n8n-mcp:v2.11.3
+docker pull ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.2
 ```
 
 ## 🔗 Container Registry
 
-*   **GitHub Container Registry**: `ghcr.io/carsaig/n8n-mcp:v2.11.3`
+*   **GitHub Container Registry**: `ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.2`
 *   **Architecture**: Supports ARM64 only
 *   **Production-ready**: Tested on Coolify, Dokploy and Docker Compose
 
@@ -116,7 +116,7 @@ docker pull ghcr.io/carsaig/n8n-mcp:v2.11.3
 
 If you're migrating from the upstream n8n-MCP repository:
 
-1.  **Replace container image**: `ghcr.io/carsaig/n8n-mcp:v2.11.3`
+1.  **Replace container image**: `ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.2`
 2.  **No configuration changes needed** - drop-in replacement
 3.  **Validation tools will work immediately** - no additional setup
 4.  **ARM64 support enabled** - works on Apple Silicon and ARM servers
