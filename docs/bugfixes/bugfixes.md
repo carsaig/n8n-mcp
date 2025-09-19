@@ -287,7 +287,7 @@ The official Docker image was built with a minimal runtime configuration that ex
 **Manual Testing:**
 
 1.  **Build Test:** `docker build --platform linux/arm64 -t n8n-mcp:coolify-arm64 .`
-2.  **Registry Upload:** `docker push ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.2`
+2.  **Registry Upload:** `docker push ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.3s.2`
 3.  **Deployment Test:** Container startup and health checks
 4.  **Functionality Test:** MCP server initialization and tool availability
 
@@ -648,7 +648,7 @@ if (toolDefinition?.outputSchema) {
 
 ### 📝 **Deployment Notes**
 
-- **Container Version**: `ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.2`
+- **Container Version**: `ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.3s.2`
 - **Platform Compatibility**: ARM64 architecture (Coolify platform)
 - **Client Compatibility**: All MCP clients (ChatWise, Claude Desktop, Augment)
 - **Breaking Changes**: None - fully backward compatible
