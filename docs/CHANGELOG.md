@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 *   **Solution**: Added schema compliance logic directly in HTTP server where tools actually execute
 *   **Files Modified**: `src/http-server.ts`, `src/mcp/server.ts`
 *   **Testing**: Comprehensive validation with real production workflows and multiple MCP client types
-*   **Deployment**: Container version `ghcr.io/carsaig/n8n-mcp:v2.11.14` with ARM64 support
+*   **Deployment**: Container version `ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.2` with ARM64 support
 
 ## \[2.11.2\] - 2025-09-16
 
