@@ -1,56 +1,60 @@
 services:
   n8n-mcp:
-    image: ghcr.io/carsaig/n8n-mcp:v2.11.5-cs.3
-    container_name: n8n-mcp
-    restart: unless-stopped
+    image: 'ghcr.io/carsaig/n8n-mcp:v2.11.5'
+    user: '${UID}:${GID}'
     environment:
-      - NODE_ENV=production
       - MCP_MODE=http
-      - HTTP_PORT=3000
-      - HTTP_HOST=0.0.0.0
-      - CORS_ORIGIN=*
-      - TRUST_PROXY=1
-      - N8N_MCP_AUTH_TOKEN=${N8N_MCP_AUTH_TOKEN}
+      - 'MCP_AUTH_TOKEN=${N8N_MCP_AUTH_TOKEN}'
       - USE_FIXED_HTTP=true
-      - LOG_LEVEL=info
-      - BASE_URL=${BASE_URL}
-      - N8N_API_URL=${N8N_API_URL}
-      - N8N_API_KEY=${N8N_API_KEY}
+      - 'AUTH_TOKEN=${N8N_MCP_AUTH_TOKEN}'
+      - 'NODE_ENV=${NODE_ENV}'
+      - LOG_LEVEL=debug
+      - PORT=3000
+      - 'BASE_URL=${BASE_URL}'
+      - 'N8N_API_URL=${N8N_API_URL}'
+      - 'N8N_API_KEY=${N8N_API_KEY}'
+      - N8N_API_TIMEOUT=3000
+      - N8N_API_MAX_RETRIES=3
+      - 'CORS_ORIGIN=*'
+      - TRUST_PROXY=1
       - N8N_MODE=true
+
     volumes:
-      - ${N8N_MCP_PATH_DATA}:/app/data
-      - ${N8N_MCP_PATH_LOGS}:/app/logs
+      - '/home/ubuntu/n8n-mcp:/app/data'
+      - '/home/ubuntu/n8n-mcp/logs:/app/logs'
     ports:
-      - "3004:3000"
+      - '3004:3000'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
+      test:
+        - CMD
+        - curl
+        - '-f'
+        - 'http://127.0.0.1:3000/health'
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    restart: always
     labels:
-      # Coolify labels
-      - coolify.managed=true
-      - coolify.version=4.0.0-beta.350
-      - coolify.service=n8n-mcp
-
-      # Traefik labels for upstream MCP access
       - traefik.enable=true
-      - traefik.http.routers.n8n-mcp-upstream.entrypoints=websecure
-      - traefik.http.routers.n8n-mcp-upstream.rule=Host(`${MCP_HOST}`) && PathPrefix(`/__upstream/mcp`)
+      - traefik.http.services.n8n-mcp.loadbalancer.server.port=3000
+      - 'traefik.http.routers.n8n-mcp-upstream.rule=Host(`${MCP_HOST}`) && PathPrefix(`/__upstream/mcp`)'
+      - traefik.http.routers.n8n-mcp-upstream.entrypoints=https
       - traefik.http.routers.n8n-mcp-upstream.tls=true
-      - traefik.http.routers.n8n-mcp-upstream.tls.certresolver=letsencrypt
-      - traefik.http.routers.n8n-mcp-upstream.service=n8n-mcp-upstream
-      - traefik.http.services.n8n-mcp-upstream.loadbalancer.server.port=3000
-      - traefik.http.routers.n8n-mcp-upstream.middlewares=n8n-mcp-upstream-stripprefix
-      - traefik.http.middlewares.n8n-mcp-upstream-stripprefix.stripprefix.prefixes=/__upstream/mcp
-
-      # Traefik labels for n8n integration
-      - traefik.http.routers.n8n-mcp-on-n8n.entrypoints=websecure
-      - traefik.http.routers.n8n-mcp-on-n8n.rule=Host(`${N8N_HOST_DOMAIN}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`))
+      - traefik.http.routers.n8n-mcp-upstream.priority=20000
+      - traefik.http.routers.n8n-mcp-upstream.service=n8n-mcp
+      - traefik.http.routers.n8n-mcp-upstream.middlewares=n8n-mcp-strip-prefix
+      - traefik.http.middlewares.n8n-mcp-strip-prefix.stripprefix.prefixes=/__upstream
+      - 'traefik.http.routers.n8n-mcp-on-n8n.rule=Host(`${SERVICE_FQDN_N8N}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`))'
+      - traefik.http.routers.n8n-mcp-on-n8n.entrypoints=https
       - traefik.http.routers.n8n-mcp-on-n8n.tls=true
-      - traefik.http.routers.n8n-mcp-on-n8n.tls.certresolver=letsencrypt
-      - traefik.http.routers.n8n-mcp-on-n8n.service=n8n-mcp-on-n8n
-      - traefik.http.services.n8n-mcp-on-n8n.loadbalancer.server.port=3000
-      - traefik.http.routers.n8n-mcp-on-n8n.middlewares=n8n-mcp-on-n8n-stripprefix
-      - traefik.http.middlewares.n8n-mcp-on-n8n-stripprefix.stripprefix.prefixes=/mcp
+      - traefik.http.routers.n8n-mcp-on-n8n.priority=10000
+      - traefik.http.routers.n8n-mcp-on-n8n.service=n8n-mcp
+
+    networks:
+      - dokk88s84sgcwg848k044o4k
+
+networks:
+  dokk88s84sgcwg848k044o4k:
+    external: true
+    name: dokk88s84sgcwg848k044o4k
