@@ -107,7 +107,7 @@ jobs:
       - name: Push sync branch
         if: steps.diffcheck.outputs.changed == 'true'
         run: |
-          git push -u origin "${{ steps.prep.outputs.branch }}"
+          git push --force-with-lease -u origin "${{ steps.prep.outputs.branch }}"
 
       - name: Create or update PR
         id: cpr
