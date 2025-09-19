@@ -96,10 +96,12 @@ jobs:
           if [ -n "${GH_PAT}" ]; then
             git config user.name "Carsaig Automation"
             git config user.email "56911+carsaig@users.noreply.github.com"
+            # Unset checkout's GITHUB_TOKEN auth header so PAT is used
+            git config --local --unset-all http.https://github.com/.extraheader || true
             git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}.git"
-            echo "Using GH_AUTOMATION_PAT for push"
+            echo "Using GHCR_PAT for push"
           else
-            echo "GH_AUTOMATION_PAT not set; will use GITHUB_TOKEN. If push rejects workflow changes, add GH_AUTOMATION_PAT with repo + workflow scopes." >&2
+            echo "GHCR_PAT not set; will use GITHUB_TOKEN. If push rejects workflow changes, ensure PAT has repo scope or strip workflows from sync." >&2
           fi
 
       - name: Push sync branch
