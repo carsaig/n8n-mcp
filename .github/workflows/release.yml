@@ -29,7 +29,13 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64]
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout
@@ -44,30 +50,66 @@ jobs:
           VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          # Helper to extract base/version and cs suffix
+          parse_cs() {
+            local tag="$1"
+            if [[ "$tag" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+)-cs\.([0-9]+)$ ]]; then
+              echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+              return 0
+            fi
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "$tag 0"
+              return 0
+            fi
+            return 1
+          }
+
           if [[ -n "${VERSION_INPUT:-}" ]]; then
-            # Use manual version input
-            if [[ ! "${VERSION_INPUT}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Invalid version tag format: ${VERSION_INPUT}. Expected vMAJOR.MINOR.PATCH" >&2
+            # Accept vX.Y.Z or vX.Y.Z-cs.N
+            if [[ ! "$VERSION_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-cs\.[0-9]+)?$ ]]; then
+              echo "Invalid version tag format: ${VERSION_INPUT}. Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-cs.N" >&2
               exit 1
             fi
-            NEXT="${VERSION_INPUT}"
+            NEXT="$VERSION_INPUT"
           else
-            # Auto bump patch from latest v* tag
-            git fetch --tags --force
+            # Try to detect upstream base from recent merge commits created by upstream-sync
+            BASE=$(git log -n 100 --pretty=%s | grep -Eo 'sync upstream release v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+') || true
+
+            # Get latest existing tag in this repo (could be with or without -cs.N)
             LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)
-            if [[ -z "$LATEST" ]]; then
-              LATEST="v0.0.0"
+
+            if [[ -n "$BASE" ]]; then
+              # Determine highest cs.N for this BASE in existing tags
+              EXISTING=$(git tag -l "${BASE}-cs.*" --sort=-v:refname | head -n1 || true)
+              if [[ -n "$EXISTING" ]]; then
+                read -r _ CSN <<<"$(parse_cs "$EXISTING")"
+                NEXT="${BASE}-cs.$((CSN+1))"
+              else
+                # If we already tagged exactly BASE, start cs.1, else also start cs.1
+                NEXT="${BASE}-cs.1"
+              fi
+            else
+              # No upstream base detected; fall back on latest local tag logic
+              if [[ -z "$LATEST" ]]; then
+                NEXT="v0.0.1-cs.1"
+              else
+                if OUT="$(parse_cs "$LATEST")"; then
+                  read -r BASEONLY CSN <<<"$OUT"
+                  if [[ "$CSN" -gt 0 ]]; then
+                    NEXT="${BASEONLY}-cs.$((CSN+1))"
+                  else
+                    NEXT="${BASEONLY}-cs.1"
+                  fi
+                else
+                  echo "Unexpected latest tag format: $LATEST" >&2
+                  exit 1
+                fi
+              fi
             fi
-            ver="${LATEST#v}"
-            IFS='.' read -r MA MI PA <<<"$ver"
-            if [[ -z "$MA" || -z "$MI" || -z "$PA" ]]; then
-              echo "Unexpected latest tag format: $LATEST" >&2
-              exit 1
-            fi
-            NEXT="v${MA}.${MI}.$((PA+1))"
           fi
           echo "VERSION=${NEXT}" | tee -a "$GITHUB_ENV"
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -76,8 +118,9 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_PAT }}
+
 
       - name: Build and push (ARM64 only)
         uses: docker/build-push-action@v5
@@ -87,16 +130,92 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
 
+      - name: Echo built image tag
+        run: |
+          echo "Image: ${IMAGE_NAME}"
+          echo "Version: ${VERSION}"
+
+  release_and_deploy:
+    runs-on: ubuntu-latest
+    needs: release
+    if: ${{ needs.release.result == 'success' }}
+    permissions:
+      contents: write
+      packages: write
+      deployments: write
+    steps:
       - name: Create GitHub Release (auto or custom notes)
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ env.VERSION }}
+          tag_name: ${{ needs.release.outputs.version }}
           generate_release_notes: ${{ inputs.release_notes == '' }}
           body: ${{ inputs.release_notes }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout repository for compose bump
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump docker-compose.coolify image tag
+        id: bump_compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="docker-compose.coolify.yml"
+          if [[ ! -f "$FILE" ]]; then
+            echo "No $FILE present; skipping compose bump" >&2
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VER="${{ needs.release.outputs.version }}"
+          # Replace the image tag line
+          sed -E -i "s#^(\s*image:\s*ghcr\.io/carsaig/n8n-mcp:).*#\1${VER}#" "$FILE"
+          if git diff --quiet -- "$FILE"; then
+            echo "No changes to $FILE (already at $VER)"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Will bump $FILE to $VER"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump docs references to image tag
+        id: bump_docs
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${{ needs.release.outputs.version }}"
+          # Only touch references to the carsaig image
+          CHANGED=0
+          if compgen -G "docs/**/*.md" > /dev/null; then
+            # Replace ghcr.io/carsaig/n8n-mcp:<anything> with new ${VER}
+            find docs -type f -name "*.md" -print0 | xargs -0 sed -E -i "s#(ghcr\\.io/carsaig/n8n-mcp:)[^\`\"\)\s]+#\\1${VER}#g"
+            if ! git diff --quiet -- docs; then CHANGED=1; fi
+          fi
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR to update docker-compose.coolify.yml and docs
+        if: steps.bump_compose.outputs.changed == 'true' || steps.bump_docs.outputs.changed == '1'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/compose-docs-bump-${{ needs.release.outputs.version }}
+          title: "chore: bump Coolify compose and docs to ${{ needs.release.outputs.version }}"
+          commit-message: "chore: bump docker-compose.coolify and docs to ${{ needs.release.outputs.version }}"
+          body: |
+            This PR updates:
+            - docker-compose.coolify.yml → image tag `${{ needs.release.outputs.version }}`
+            - docs/** → references to `ghcr.io/carsaig/n8n-mcp:<tag>` bumped to `${{ needs.release.outputs.version }}`
+
+            Merge this PR so Coolify deployments and docs stay in sync with the published image.
+          add-paths: |
+            docker-compose.coolify.yml
+            docs/**
+          labels: |
+            deployment
+            documentation
 
       - name: Start GitHub Deployment
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
@@ -107,7 +226,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           env: production
           ref: ${{ github.sha }}
-          description: "Coolify deploy"
 
       - name: Load secrets from 1Password
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
@@ -123,25 +241,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL -X POST \
+          echo "Invoking Coolify webhook: $COOLIFY_WEBHOOK_URL"
+          HTTP_CODE=$(curl -s -o /tmp/coolify_resp.json -w "%{http_code}" -X POST \
             -H "Authorization: Bearer ${COOLIFY_API_KEY}" \
-            "$COOLIFY_WEBHOOK_URL"
-
+            "$COOLIFY_WEBHOOK_URL")
+          echo "Coolify HTTP: ${HTTP_CODE}"
+          echo "Coolify response body:" && cat /tmp/coolify_resp.json || true
+          if [[ "${HTTP_CODE}" -lt 200 || "${HTTP_CODE}" -ge 300 ]]; then
+            echo "Coolify webhook failed with HTTP ${HTTP_CODE}" >&2
+            exit 1
+          fi
 
       - name: Mark deployment success
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) && success() }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) && success() && steps.gh_deploy_start.outcome == 'success' }}
         uses: bobheadxi/deployments@v1
         with:
           step: finish
           token: ${{ secrets.GITHUB_TOKEN }}
+          env: production
           status: success
           deployment_id: ${{ steps.gh_deploy_start.outputs.deployment_id }}
 
       - name: Mark deployment failure
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) && failure() }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) && failure() && steps.gh_deploy_start.outcome == 'success' }}
         uses: bobheadxi/deployments@v1
         with:
           step: finish
           token: ${{ secrets.GITHUB_TOKEN }}
+          env: production
           status: failure
           deployment_id: ${{ steps.gh_deploy_start.outputs.deployment_id }}
