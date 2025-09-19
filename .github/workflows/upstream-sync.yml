@@ -60,24 +60,27 @@ jobs:
           git remote add upstream "${UPSTREAM_URL}" || true
           TAG="${{ steps.latest.outputs.tag }}"
           TMPBR="_upstream_${TAG}"
-          # Fetch upstream tag commit into a temporary local branch (no local tags created)
-          # This peels annotated tags to commits via ^{commit}
-          git fetch --no-tags upstream "refs/tags/${TAG}^{commit}:refs/heads/${TMPBR}"
+          # Fetch upstream tag into a temporary local tag, peel to commit, then create branch
+          git fetch --no-tags upstream "refs/tags/${TAG}:refs/tags/_tmp_upstream_tag" || {
+            echo "Unable to fetch upstream tag ${TAG}" >&2
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          OID=$(git rev-parse "_tmp_upstream_tag^{commit}")
           # Determine if that commit is already in origin/main
           git fetch origin main
-          if git merge-base --is-ancestor "${TMPBR}" origin/main; then
+          if git merge-base --is-ancestor "${OID}" origin/main; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            # Clean up temp branch
-            git branch -D "${TMPBR}" >/dev/null 2>&1 || true
+            git tag -d _tmp_upstream_tag >/dev/null 2>&1 || true
             exit 0
           fi
           BRANCH="chore/upstream-sync-${TAG}"
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "changed=true" >> "$GITHUB_OUTPUT"
           # Create branch at the upstream release commit
-          git checkout -B "${BRANCH}" "${TMPBR}"
-          # Clean up temp branch
-          git branch -D "${TMPBR}" >/dev/null 2>&1 || true
+          git checkout -B "${BRANCH}" "${OID}"
+          # Clean up temp tag
+          git tag -d _tmp_upstream_tag >/dev/null 2>&1 || true
 
       - name: Evaluate change status
         id: diffcheck
