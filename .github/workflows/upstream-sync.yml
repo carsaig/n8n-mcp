@@ -128,7 +128,7 @@ jobs:
           delete-branch: false
 
       - name: Enable PR auto-merge (squash) once checks pass
-        if: steps.diffcheck.outputs.changed == 'true'
+        if: steps.diffcheck.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number && steps.cpr.outputs.pull-request-number != ''
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
