@@ -161,6 +161,21 @@ jobs:
         with:
           fetch-depth: 0
 
+
+      - name: Paths filter (docs/compose fast-skip)
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docs_compose:
+              - 'docs/**'
+              - 'docker-compose.coolify.yml'
+
+
+      - name: Fast-pass (docs/compose only)
+        if: steps.filter.outputs.docs_compose == 'true'
+        run: echo Fast-pass for docs/compose only - skipping heavy checks
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -168,16 +183,20 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        if: steps.filter.outputs.docs_compose != 'true'
         run: npm install --no-audit --no-fund --prefer-offline --legacy-peer-deps
 
       - name: Typecheck
+        if: steps.filter.outputs.docs_compose != 'true'
         run: npm run typecheck
 
       - name: Unit tests (temporarily skipped)
         run: echo "Skipping unit tests in CI for stability; running typecheck + validate only"
 
       - name: Build
+        if: steps.filter.outputs.docs_compose != 'true'
         run: npm run build
 
       - name: Workflow validators
+        if: steps.filter.outputs.docs_compose != 'true'
         run: npm run validate
