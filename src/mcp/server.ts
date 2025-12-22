@@ -948,10 +948,11 @@ export class N8NDocumentationMCPServer {
         return n8nHandlers.handleHealthCheck();
       case 'n8n_list_available_tools':
         // No required parameters
-        if (typeof (n8nHandlers as { handleListAvailableTools?: () => Promise<unknown> }).handleListAvailableTools !== 'function') {
+        const handlersUnknown = n8nHandlers as unknown as { handleListAvailableTools?: () => Promise<unknown> };
+        if (typeof handlersUnknown.handleListAvailableTools !== 'function') {
           throw new Error('n8n_list_available_tools is not available in this build');
         }
-        return (n8nHandlers as { handleListAvailableTools: () => Promise<unknown> }).handleListAvailableTools();
+        return handlersUnknown.handleListAvailableTools();
       case 'n8n_diagnostic':
         // No required parameters
         return n8nHandlers.handleDiagnostic({ params: { arguments: args } });
