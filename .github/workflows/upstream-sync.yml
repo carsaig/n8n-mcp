@@ -133,9 +133,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TOKEN="${GH_PAT:-$GITHUB_TOKEN}"
+          # Use GITHUB_TOKEN for PR creation; GHCR_PAT is for push and may not have repo scope.
+          TOKEN="${GITHUB_TOKEN:-}"
           if [ -z "${TOKEN}" ]; then
-            echo "No token available to create PR. Set GHCR_PAT with repo scope." >&2
+            TOKEN="${GH_PAT:-}"
+          fi
+          if [ -z "${TOKEN}" ]; then
+            echo "No token available to create PR. Set GITHUB_TOKEN or GHCR_PAT with repo scope." >&2
             exit 1
           fi
           BRANCH="${{ steps.prep.outputs.branch }}"
@@ -159,15 +163,22 @@ jobs:
           if [ -n "${EXISTING}" ]; then
             PR_NUMBER="${EXISTING}"
           else
-            PR_NUMBER=$(curl -sSL -X POST -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
+            CREATE_RAW=$(curl -sSL -w "\n%{http_code}" -X POST -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${OWNER}/${REPO}/pulls" \
-              -d "{\"title\":\"${TITLE}\",\"head\":\"${BRANCH}\",\"base\":\"${BASE}\",\"body\":\"${BODY}\"}" | jq -r '.number // empty')
+              -d "{\"title\":\"${TITLE}\",\"head\":\"${BRANCH}\",\"base\":\"${BASE}\",\"body\":\"${BODY}\"}")
+            CREATE_BODY=$(echo "${CREATE_RAW}" | sed '$d')
+            CREATE_CODE=$(echo "${CREATE_RAW}" | tail -n 1)
+            if [ "${CREATE_CODE}" != "201" ]; then
+              echo "PR create failed with status ${CREATE_CODE}" >&2
+              echo "${CREATE_BODY}" >&2
+              exit 1
+            fi
+            PR_NUMBER=$(echo "${CREATE_BODY}" | jq -r '.number // empty')
           fi
 
           if [ -z "${PR_NUMBER}" ]; then
-            echo "Failed to create or locate PR for ${BRANCH}; skipping." >&2
-            echo "pull-request-number=" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "Failed to create or locate PR for ${BRANCH}." >&2
+            exit 1
           fi
 
           echo "pull-request-number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
