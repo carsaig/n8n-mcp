@@ -1,6 +1,6 @@
 services:
   n8n-mcp:
-    image: 'ghcr.io/carsaig/n8n-mcp:v2.11.5'
+    image: 'ghcr.io/carsaig/n8n-mcp:latest'
     user: '${UID}:${GID}'
     environment:
       - MCP_MODE=http
