@@ -83,17 +83,26 @@ jobs:
           git checkout -B "${BRANCH}" origin/main
           if ! git merge --no-ff --no-edit "${OID}"; then
             echo "Merge conflict while preparing ${BRANCH}. Applying fork-vs-upstream resolution policy..." >&2
-            # Keep fork-specific workflows and deployment setup
-            git checkout --ours -- .github/workflows Dockerfile src/http-server.ts src/http-server-single-session.ts src/mcp/index.ts src/mcp/server.ts src/mcp/handlers-n8n-manager.ts src/mcp/handlers-workflow-diff.ts AGENTS.md CLAUDE.md || true
-            # Take upstream for the rest of the known conflict set
-            git checkout --theirs -- .gitignore MEMORY_N8N_UPDATE.md README.md docs/CHANGELOG.md package-lock.json package.json || true
+            UNMERGED=$(git diff --name-only --diff-filter=U || true)
+            if [ -n "${UNMERGED}" ]; then
+              while IFS= read -r path; do
+                case "${path}" in
+                  .github/workflows/*|Dockerfile|src/http-server.ts|src/http-server-single-session.ts|src/mcp/index.ts|src/mcp/server.ts|src/mcp/handlers-n8n-manager.ts|src/mcp/handlers-workflow-diff.ts|AGENTS.md|CLAUDE.md)
+                    git checkout --ours -- "${path}" || true
+                    ;;
+                  .gitignore|MEMORY_N8N_UPDATE.md|README.md|docs/CHANGELOG.md|package-lock.json|package.json)
+                    git checkout --theirs -- "${path}" || true
+                    ;;
+                esac
+              done <<< "${UNMERGED}"
+            fi
             git add -A
-            if ! git diff --cached --quiet; then
-              git commit -m "chore: resolve upstream sync conflicts"
-            else
-              echo "No conflict resolutions staged; failing for manual review." >&2
+            if git diff --name-only --diff-filter=U | rg -q .; then
+              echo "Unresolved conflicts remain:" >&2
+              git diff --name-only --diff-filter=U >&2
               exit 1
             fi
+            git commit -m "chore: resolve upstream sync conflicts"
           fi
           # Clean up temp tag
           git tag -d _tmp_upstream_tag >/dev/null 2>&1 || true
@@ -207,9 +216,9 @@ jobs:
             "https://api.github.com/repos/${OWNER}/${REPO}" | jq -r '.allow_auto_merge // false')
           echo "allow_auto_merge=${ALLOW}" >> "$GITHUB_OUTPUT"
 
-      - name: Enable PR auto-merge (squash) once checks pass
+      - name: Enable PR auto-merge (merge) once checks pass
         if: steps.diffcheck.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number && steps.cpr.outputs.pull-request-number != '' && steps.automerge.outputs.allow_auto_merge == 'true'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
-          merge-method: squash
+          merge-method: merge
