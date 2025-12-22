@@ -19,11 +19,17 @@ export const defaultSanitizerConfig: SanitizerConfig = {
   tokenPatterns: [
     /apify_api_[A-Za-z0-9]+/g,
     /sk-[A-Za-z0-9]+/g, // OpenAI tokens
+    /pat[A-Za-z0-9_]{40,}/g, // Airtable Personal Access Tokens
+    /ghp_[A-Za-z0-9]{36,}/g, // GitHub Personal Access Tokens
+    /gho_[A-Za-z0-9]{36,}/g, // GitHub OAuth tokens
     /Bearer\s+[A-Za-z0-9\-._~+\/]+=*/g // Generic bearer tokens
   ],
   replacements: new Map([
     ['apify_api_', 'apify_api_YOUR_TOKEN_HERE'],
     ['sk-', 'sk-YOUR_OPENAI_KEY_HERE'],
+    ['pat', 'patYOUR_AIRTABLE_TOKEN_HERE'],
+    ['ghp_', 'ghp_YOUR_GITHUB_TOKEN_HERE'],
+    ['gho_', 'gho_YOUR_GITHUB_TOKEN_HERE'],
     ['Bearer ', 'Bearer YOUR_TOKEN_HERE']
   ])
 };
@@ -59,22 +65,26 @@ export class TemplateSanitizer {
    * Sanitize a workflow object
    */
   sanitizeWorkflow(workflow: any): { sanitized: any; wasModified: boolean } {
+    if (!workflow) {
+      return { sanitized: workflow, wasModified: false };
+    }
+
     const original = JSON.stringify(workflow);
     let sanitized = this.sanitizeObject(workflow);
-    
+
     // Remove sensitive workflow data
-    if (sanitized.pinData) {
+    if (sanitized && sanitized.pinData) {
       delete sanitized.pinData;
     }
-    if (sanitized.executionId) {
+    if (sanitized && sanitized.executionId) {
       delete sanitized.executionId;
     }
-    if (sanitized.staticData) {
+    if (sanitized && sanitized.staticData) {
       delete sanitized.staticData;
     }
-    
+
     const wasModified = JSON.stringify(sanitized) !== original;
-    
+
     return { sanitized, wasModified };
   }
   

@@ -5,30 +5,43 @@
  * while maintaining simplicity for single-player use case
  */
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { N8NDocumentationMCPServer } from './mcp/server';
 import { ConsoleManager } from './utils/console-manager';
 import { logger } from './utils/logger';
+import { AuthManager } from './utils/auth';
 import { readFileSync } from 'fs';
 import dotenv from 'dotenv';
 import { getStartupBaseUrl, formatEndpointUrls, detectBaseUrl } from './utils/url-detector';
 import { PROJECT_VERSION } from './utils/version';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { 
-  negotiateProtocolVersion, 
+import {
+  negotiateProtocolVersion,
   logProtocolNegotiation,
-  STANDARD_PROTOCOL_VERSION 
+  STANDARD_PROTOCOL_VERSION
 } from './utils/protocol-version';
+import { InstanceContext, validateInstanceContext } from './types/instance-context';
+import { SessionState } from './types/session-state';
 
 dotenv.config();
 
 // Protocol version constant - will be negotiated per client
 const DEFAULT_PROTOCOL_VERSION = STANDARD_PROTOCOL_VERSION;
 
+// Type-safe headers interface for multi-tenant support
+interface MultiTenantHeaders {
+  'x-n8n-url'?: string;
+  'x-n8n-key'?: string;
+  'x-instance-id'?: string;
+  'x-session-id'?: string;
+}
+
 // Session management constants
-const MAX_SESSIONS = 100;
+const MAX_SESSIONS = Math.max(1, parseInt(process.env.N8N_MCP_MAX_SESSIONS || '100', 10));
 const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 interface Session {
@@ -47,11 +60,49 @@ interface SessionMetrics {
   lastCleanup: Date;
 }
 
+/**
+ * Extract multi-tenant headers in a type-safe manner
+ */
+function extractMultiTenantHeaders(req: express.Request): MultiTenantHeaders {
+  return {
+    'x-n8n-url': req.headers['x-n8n-url'] as string | undefined,
+    'x-n8n-key': req.headers['x-n8n-key'] as string | undefined,
+    'x-instance-id': req.headers['x-instance-id'] as string | undefined,
+    'x-session-id': req.headers['x-session-id'] as string | undefined,
+  };
+}
+
+/**
+ * Security logging helper for audit trails
+ * Provides structured logging for security-relevant events
+ */
+function logSecurityEvent(
+  event: 'session_export' | 'session_restore' | 'session_restore_failed' | 'max_sessions_reached',
+  details: {
+    sessionId?: string;
+    reason?: string;
+    count?: number;
+    instanceId?: string;
+  }
+): void {
+  const timestamp = new Date().toISOString();
+  const logEntry = {
+    timestamp,
+    event,
+    ...details
+  };
+
+  // Log to standard logger with [SECURITY] prefix for easy filtering
+  logger.info(`[SECURITY] ${event}`, logEntry);
+}
+
 export class SingleSessionHTTPServer {
   // Map to store transports by session ID (following SDK pattern)
   private transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
   private servers: { [sessionId: string]: N8NDocumentationMCPServer } = {};
   private sessionMetadata: { [sessionId: string]: { lastAccess: Date; createdAt: Date } } = {};
+  private sessionContexts: { [sessionId: string]: InstanceContext | undefined } = {};
+  private contextSwitchLocks: Map<string, Promise<void>> = new Map();
   private session: Session | null = null;  // Keep for SSE compatibility
   private consoleManager = new ConsoleManager();
   private expressServer: any;
@@ -93,7 +144,7 @@ export class SingleSessionHTTPServer {
   private cleanupExpiredSessions(): void {
     const now = Date.now();
     const expiredSessions: string[] = [];
-    
+
     // Check for expired sessions
     for (const sessionId in this.sessionMetadata) {
       const metadata = this.sessionMetadata[sessionId];
@@ -101,14 +152,23 @@ export class SingleSessionHTTPServer {
         expiredSessions.push(sessionId);
       }
     }
-    
+
+    // Also check for orphaned contexts (sessions that were removed but context remained)
+    for (const sessionId in this.sessionContexts) {
+      if (!this.sessionMetadata[sessionId]) {
+        // Context exists but session doesn't - clean it up
+        delete this.sessionContexts[sessionId];
+        logger.debug('Cleaned orphaned session context', { sessionId });
+      }
+    }
+
     // Remove expired sessions
     for (const sessionId of expiredSessions) {
       this.removeSession(sessionId, 'expired');
     }
-    
+
     if (expiredSessions.length > 0) {
-      logger.info('Cleaned up expired sessions', { 
+      logger.info('Cleaned up expired sessions', {
         removed: expiredSessions.length,
         remaining: this.getActiveSessionCount()
       });
@@ -120,16 +180,34 @@ export class SingleSessionHTTPServer {
    */
   private async removeSession(sessionId: string, reason: string): Promise<void> {
     try {
-      // Close transport if exists
-      if (this.transports[sessionId]) {
-        await this.transports[sessionId].close();
-        delete this.transports[sessionId];
-      }
-      
-      // Remove server and metadata
+      // Store references before deletion
+      const transport = this.transports[sessionId];
+      const server = this.servers[sessionId];
+
+      // Delete references FIRST to prevent onclose handler from triggering recursion
+      // This breaks the circular reference: removeSession -> close -> onclose -> removeSession
+      delete this.transports[sessionId];
       delete this.servers[sessionId];
       delete this.sessionMetadata[sessionId];
-      
+      delete this.sessionContexts[sessionId];
+
+      // Close server first (may have references to transport)
+      // This fixes memory leak where server resources weren't freed (issue #471)
+      // Handle server close errors separately so transport close still runs
+      if (server && typeof server.close === 'function') {
+        try {
+          await server.close();
+        } catch (serverError) {
+          logger.warn('Error closing server', { sessionId, error: serverError });
+        }
+      }
+
+      // Close transport last
+      // When onclose handler fires, it won't find the transport anymore
+      if (transport) {
+        await transport.close();
+      }
+
       logger.info('Session removed', { sessionId, reason });
     } catch (error) {
       logger.warn('Error removing session', { sessionId, reason, error });
@@ -152,11 +230,22 @@ export class SingleSessionHTTPServer {
   
   /**
    * Validate session ID format
+   *
+   * Accepts any non-empty string to support various MCP clients:
+   * - UUIDv4 (internal n8n-mcp format)
+   * - instance-{userId}-{hash}-{uuid} (multi-tenant format)
+   * - Custom formats from mcp-remote and other proxies
+   *
+   * Security: Session validation happens via lookup in this.transports,
+   * not format validation. This ensures compatibility with all MCP clients.
+   *
+   * @param sessionId - Session identifier from MCP client
+   * @returns true if valid, false otherwise
    */
   private isValidSessionId(sessionId: string): boolean {
-    // UUID v4 format validation
-    const uuidv4Regex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    return uuidv4Regex.test(sessionId);
+    // Accept any non-empty string as session ID
+    // This ensures compatibility with all MCP clients and proxies
+    return Boolean(sessionId && sessionId.length > 0);
   }
   
   /**
@@ -201,7 +290,55 @@ export class SingleSessionHTTPServer {
       this.sessionMetadata[sessionId].lastAccess = new Date();
     }
   }
-  
+
+  /**
+   * Switch session context with locking to prevent race conditions
+   */
+  private async switchSessionContext(sessionId: string, newContext: InstanceContext): Promise<void> {
+    // Check if there's already a switch in progress for this session
+    const existingLock = this.contextSwitchLocks.get(sessionId);
+    if (existingLock) {
+      // Wait for the existing switch to complete
+      await existingLock;
+      return;
+    }
+
+    // Create a promise for this switch operation
+    const switchPromise = this.performContextSwitch(sessionId, newContext);
+    this.contextSwitchLocks.set(sessionId, switchPromise);
+
+    try {
+      await switchPromise;
+    } finally {
+      // Clean up the lock after completion
+      this.contextSwitchLocks.delete(sessionId);
+    }
+  }
+
+  /**
+   * Perform the actual context switch
+   */
+  private async performContextSwitch(sessionId: string, newContext: InstanceContext): Promise<void> {
+    const existingContext = this.sessionContexts[sessionId];
+
+    // Only switch if the context has actually changed
+    if (JSON.stringify(existingContext) !== JSON.stringify(newContext)) {
+      logger.info('Multi-tenant shared mode: Updating instance context for session', {
+        sessionId,
+        oldInstanceId: existingContext?.instanceId,
+        newInstanceId: newContext.instanceId
+      });
+
+      // Update the session context
+      this.sessionContexts[sessionId] = newContext;
+
+      // Update the MCP server's instance context if it exists
+      if (this.servers[sessionId]) {
+        (this.servers[sessionId] as any).instanceContext = newContext;
+      }
+    }
+  }
+
   /**
    * Get session metrics for monitoring
    */
@@ -301,8 +438,16 @@ export class SingleSessionHTTPServer {
 
   /**
    * Handle incoming MCP request using proper SDK pattern
+   *
+   * @param req - Express request object
+   * @param res - Express response object
+   * @param instanceContext - Optional instance-specific configuration
    */
-  async handleRequest(req: express.Request, res: express.Response): Promise<void> {
+  async handleRequest(
+    req: express.Request,
+    res: express.Response,
+    instanceContext?: InstanceContext
+  ): Promise<void> {
     const startTime = Date.now();
     
     // Wrap all operations to prevent console interference
@@ -346,10 +491,37 @@ export class SingleSessionHTTPServer {
           
           // For initialize requests: always create new transport and server
           logger.info('handleRequest: Creating new transport for initialize request');
-          
-          // Use client-provided session ID or generate one if not provided
-          const sessionIdToUse = sessionId || uuidv4();
-          const server = new N8NDocumentationMCPServer();
+
+          // Generate session ID based on multi-tenant configuration
+          let sessionIdToUse: string;
+
+          const isMultiTenantEnabled = process.env.ENABLE_MULTI_TENANT === 'true';
+          const sessionStrategy = process.env.MULTI_TENANT_SESSION_STRATEGY || 'instance';
+
+          if (isMultiTenantEnabled && sessionStrategy === 'instance' && instanceContext?.instanceId) {
+            // In multi-tenant mode with instance strategy, create session per instance
+            // This ensures each tenant gets isolated sessions
+            // Include configuration hash to prevent collisions with different configs
+            const configHash = createHash('sha256')
+              .update(JSON.stringify({
+                url: instanceContext.n8nApiUrl,
+                instanceId: instanceContext.instanceId
+              }))
+              .digest('hex')
+              .substring(0, 8);
+
+            sessionIdToUse = `instance-${instanceContext.instanceId}-${configHash}-${uuidv4()}`;
+            logger.info('Multi-tenant mode: Creating instance-specific session', {
+              instanceId: instanceContext.instanceId,
+              configHash,
+              sessionId: sessionIdToUse
+            });
+          } else {
+            // Use client-provided session ID or generate a standard one
+            sessionIdToUse = sessionId || uuidv4();
+          }
+
+          const server = new N8NDocumentationMCPServer(instanceContext);
           
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => sessionIdToUse,
@@ -361,11 +533,12 @@ export class SingleSessionHTTPServer {
               this.transports[initializedSessionId] = transport;
               this.servers[initializedSessionId] = server;
               
-              // Store session metadata
+              // Store session metadata and context
               this.sessionMetadata[initializedSessionId] = {
                 lastAccess: new Date(),
                 createdAt: new Date()
               };
+              this.sessionContexts[initializedSessionId] = instanceContext;
             }
           });
           
@@ -411,7 +584,16 @@ export class SingleSessionHTTPServer {
           // For non-initialize requests: reuse existing transport for this session
           logger.info('handleRequest: Reusing existing transport for session', { sessionId });
           transport = this.transports[sessionId];
-          
+
+          // In multi-tenant shared mode, update instance context if provided
+          const isMultiTenantEnabled = process.env.ENABLE_MULTI_TENANT === 'true';
+          const sessionStrategy = process.env.MULTI_TENANT_SESSION_STRATEGY || 'instance';
+
+          if (isMultiTenantEnabled && sessionStrategy === 'shared' && instanceContext) {
+            // Update the context for this session with locking to prevent race conditions
+            await this.switchSessionContext(sessionId, instanceContext);
+          }
+
           // Update session access time
           this.updateSessionAccess(sessionId);
           
@@ -542,7 +724,20 @@ export class SingleSessionHTTPServer {
     if (!this.session) return true;
     return Date.now() - this.session.lastAccess.getTime() > this.sessionTimeout;
   }
-  
+
+  /**
+   * Check if a specific session is expired based on sessionId
+   * Used for multi-session expiration checks during export/restore
+   *
+   * @param sessionId - The session ID to check
+   * @returns true if session is expired or doesn't exist
+   */
+  private isSessionExpired(sessionId: string): boolean {
+    const metadata = this.sessionMetadata[sessionId];
+    if (!metadata) return true;
+    return Date.now() - metadata.lastAccess.getTime() > this.sessionTimeout;
+  }
+
   /**
    * Start the HTTP server
    */
@@ -861,8 +1056,41 @@ export class SingleSessionHTTPServer {
     });
 
 
-    // Main MCP endpoint with authentication
-    app.post('/mcp', jsonParser, async (req: express.Request, res: express.Response): Promise<void> => {
+    // SECURITY: Rate limiting for authentication endpoint
+    // Prevents brute force attacks and DoS
+    // See: https://github.com/czlonkowski/n8n-mcp/issues/265 (HIGH-02)
+    const authLimiter = rateLimit({
+      windowMs: parseInt(process.env.AUTH_RATE_LIMIT_WINDOW || '900000'), // 15 minutes
+      max: parseInt(process.env.AUTH_RATE_LIMIT_MAX || '20'), // 20 authentication attempts per IP
+      message: {
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'Too many authentication attempts. Please try again later.'
+        },
+        id: null
+      },
+      standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
+      legacyHeaders: false, // Disable `X-RateLimit-*` headers
+      handler: (req, res) => {
+        logger.warn('Rate limit exceeded', {
+          ip: req.ip,
+          userAgent: req.get('user-agent'),
+          event: 'rate_limit'
+        });
+        res.status(429).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Too many authentication attempts'
+          },
+          id: null
+        });
+      }
+    });
+
+    // Main MCP endpoint with authentication and rate limiting
+    app.post('/mcp', authLimiter, jsonParser, async (req: express.Request, res: express.Response): Promise<void> => {
       // Log comprehensive debug info about the request
       logger.info('POST /mcp request received - DETAILED DEBUG', {
         headers: req.headers,
@@ -953,15 +1181,19 @@ export class SingleSessionHTTPServer {
       
       // Extract token and trim whitespace
       const token = authHeader.slice(7).trim();
-      
-      // Check if token matches
-      if (token !== this.authToken) {
-        logger.warn('Authentication failed: Invalid token', { 
+
+      // SECURITY: Use timing-safe comparison to prevent timing attacks
+      // See: https://github.com/czlonkowski/n8n-mcp/issues/265 (CRITICAL-02)
+      const isValidToken = this.authToken &&
+        AuthManager.timingSafeCompare(token, this.authToken);
+
+      if (!isValidToken) {
+        logger.warn('Authentication failed: Invalid token', {
           ip: req.ip,
           userAgent: req.get('user-agent'),
           reason: 'invalid_token'
         });
-        res.status(401).json({ 
+        res.status(401).json({
           jsonrpc: '2.0',
           error: {
             code: -32001,
@@ -978,8 +1210,59 @@ export class SingleSessionHTTPServer {
         sessionType: this.session?.isSSE ? 'SSE' : 'StreamableHTTP',
         sessionInitialized: this.session?.initialized
       });
-      
-      await this.handleRequest(req, res);
+
+      // Extract instance context from headers if present (for multi-tenant support)
+      const instanceContext: InstanceContext | undefined = (() => {
+        // Use type-safe header extraction
+        const headers = extractMultiTenantHeaders(req);
+        const hasUrl = headers['x-n8n-url'];
+        const hasKey = headers['x-n8n-key'];
+
+        if (!hasUrl && !hasKey) return undefined;
+
+        // Create context with proper type handling
+        const context: InstanceContext = {
+          n8nApiUrl: hasUrl || undefined,
+          n8nApiKey: hasKey || undefined,
+          instanceId: headers['x-instance-id'] || undefined,
+          sessionId: headers['x-session-id'] || undefined
+        };
+
+        // Add metadata if available
+        if (req.headers['user-agent'] || req.ip) {
+          context.metadata = {
+            userAgent: req.headers['user-agent'] as string | undefined,
+            ip: req.ip
+          };
+        }
+
+        // Validate the context
+        const validation = validateInstanceContext(context);
+        if (!validation.valid) {
+          logger.warn('Invalid instance context from headers', {
+            errors: validation.errors,
+            hasUrl: !!hasUrl,
+            hasKey: !!hasKey
+          });
+          return undefined;
+        }
+
+        return context;
+      })();
+
+      // Log context extraction for debugging (only if context exists)
+      if (instanceContext) {
+        // Use sanitized logging for security
+        logger.debug('Instance context extracted from headers', {
+          hasUrl: !!instanceContext.n8nApiUrl,
+          hasKey: !!instanceContext.n8nApiKey,
+          instanceId: instanceContext.instanceId ? instanceContext.instanceId.substring(0, 8) + '...' : undefined,
+          sessionId: instanceContext.sessionId ? instanceContext.sessionId.substring(0, 8) + '...' : undefined,
+          urlDomain: instanceContext.n8nApiUrl ? new URL(instanceContext.n8nApiUrl).hostname : undefined
+        });
+      }
+
+      await this.handleRequest(req, res, instanceContext);
       
       logger.info('POST /mcp request completed - checking response status', {
         responseHeadersSent: res.headersSent,
@@ -1172,6 +1455,197 @@ export class SingleSessionHTTPServer {
         sessionIds: Object.keys(this.transports)
       }
     };
+  }
+
+  /**
+   * Export all active session state for persistence
+   *
+   * Used by multi-tenant backends to dump sessions before container restart.
+   * This method exports the minimal state needed to restore sessions after
+   * a restart: session metadata (timing) and instance context (credentials).
+   *
+   * Transport and server objects are NOT persisted - they will be recreated
+   * on the first request after restore.
+   *
+   * SECURITY WARNING: The exported data contains plaintext n8n API keys.
+   * The downstream application MUST encrypt this data before persisting to disk.
+   *
+   * @returns Array of session state objects, excluding expired sessions
+   *
+   * @example
+   * // Before shutdown
+   * const sessions = server.exportSessionState();
+   * await saveToEncryptedStorage(sessions);
+   */
+  public exportSessionState(): SessionState[] {
+    const sessions: SessionState[] = [];
+    const seenSessionIds = new Set<string>();
+
+    // Iterate over all sessions with metadata (source of truth for active sessions)
+    for (const sessionId of Object.keys(this.sessionMetadata)) {
+      // Check for duplicates (defensive programming)
+      if (seenSessionIds.has(sessionId)) {
+        logger.warn(`Duplicate sessionId detected during export: ${sessionId}`);
+        continue;
+      }
+
+      // Skip expired sessions - they're not worth persisting
+      if (this.isSessionExpired(sessionId)) {
+        continue;
+      }
+
+      const metadata = this.sessionMetadata[sessionId];
+      const context = this.sessionContexts[sessionId];
+
+      // Skip sessions without context - these can't be restored meaningfully
+      // (Context is required to reconnect to the correct n8n instance)
+      if (!context || !context.n8nApiUrl || !context.n8nApiKey) {
+        logger.debug(`Skipping session ${sessionId} - missing required context`);
+        continue;
+      }
+
+      seenSessionIds.add(sessionId);
+      sessions.push({
+        sessionId,
+        metadata: {
+          createdAt: metadata.createdAt.toISOString(),
+          lastAccess: metadata.lastAccess.toISOString()
+        },
+        context: {
+          n8nApiUrl: context.n8nApiUrl,
+          n8nApiKey: context.n8nApiKey,
+          instanceId: context.instanceId || sessionId, // Use sessionId as fallback
+          sessionId: context.sessionId,
+          metadata: context.metadata
+        }
+      });
+    }
+
+    logger.info(`Exported ${sessions.length} session(s) for persistence`);
+    logSecurityEvent('session_export', { count: sessions.length });
+    return sessions;
+  }
+
+  /**
+   * Restore session state from previously exported data
+   *
+   * Used by multi-tenant backends to restore sessions after container restart.
+   * This method restores only the session metadata and instance context.
+   * Transport and server objects will be recreated on the first request.
+   *
+   * Restored sessions are "dormant" until a client makes a request, at which
+   * point the transport and server will be initialized normally.
+   *
+   * @param sessions - Array of session state objects from exportSessionState()
+   * @returns Number of sessions successfully restored
+   *
+   * @example
+   * // After startup
+   * const sessions = await loadFromEncryptedStorage();
+   * const count = server.restoreSessionState(sessions);
+   * console.log(`Restored ${count} sessions`);
+   */
+  public restoreSessionState(sessions: SessionState[]): number {
+    let restoredCount = 0;
+
+    for (const sessionState of sessions) {
+      try {
+        // Skip null or invalid session objects
+        if (!sessionState || typeof sessionState !== 'object' || !sessionState.sessionId) {
+          logger.warn('Skipping invalid session state object');
+          continue;
+        }
+
+        // Check if we've hit the MAX_SESSIONS limit (check real-time count)
+        if (Object.keys(this.sessionMetadata).length >= MAX_SESSIONS) {
+          logger.warn(
+            `Reached MAX_SESSIONS limit (${MAX_SESSIONS}), skipping remaining sessions`
+          );
+          logSecurityEvent('max_sessions_reached', { count: MAX_SESSIONS });
+          break;
+        }
+
+        // Skip if session already exists (duplicate sessionId)
+        if (this.sessionMetadata[sessionState.sessionId]) {
+          logger.debug(`Skipping session ${sessionState.sessionId} - already exists`);
+          continue;
+        }
+
+        // Parse and validate dates first
+        const createdAt = new Date(sessionState.metadata.createdAt);
+        const lastAccess = new Date(sessionState.metadata.lastAccess);
+
+        if (isNaN(createdAt.getTime()) || isNaN(lastAccess.getTime())) {
+          logger.warn(
+            `Skipping session ${sessionState.sessionId} - invalid date format`
+          );
+          continue;
+        }
+
+        // Validate session isn't expired
+        const age = Date.now() - lastAccess.getTime();
+        if (age > this.sessionTimeout) {
+          logger.debug(
+            `Skipping session ${sessionState.sessionId} - expired (age: ${Math.round(age / 1000)}s)`
+          );
+          continue;
+        }
+
+        // Validate context exists (TypeScript null narrowing)
+        if (!sessionState.context) {
+          logger.warn(`Skipping session ${sessionState.sessionId} - missing context`);
+          continue;
+        }
+
+        // Validate context structure using existing validation
+        const validation = validateInstanceContext(sessionState.context);
+        if (!validation.valid) {
+          const reason = validation.errors?.join(', ') || 'invalid context';
+          logger.warn(
+            `Skipping session ${sessionState.sessionId} - invalid context: ${reason}`
+          );
+          logSecurityEvent('session_restore_failed', {
+            sessionId: sessionState.sessionId,
+            reason
+          });
+          continue;
+        }
+
+        // Restore session metadata
+        this.sessionMetadata[sessionState.sessionId] = {
+          createdAt,
+          lastAccess
+        };
+
+        // Restore session context
+        this.sessionContexts[sessionState.sessionId] = {
+          n8nApiUrl: sessionState.context.n8nApiUrl,
+          n8nApiKey: sessionState.context.n8nApiKey,
+          instanceId: sessionState.context.instanceId,
+          sessionId: sessionState.context.sessionId,
+          metadata: sessionState.context.metadata
+        };
+
+        logger.debug(`Restored session ${sessionState.sessionId}`);
+        logSecurityEvent('session_restore', {
+          sessionId: sessionState.sessionId,
+          instanceId: sessionState.context.instanceId
+        });
+        restoredCount++;
+      } catch (error) {
+        logger.error(`Failed to restore session ${sessionState.sessionId}:`, error);
+        logSecurityEvent('session_restore_failed', {
+          sessionId: sessionState.sessionId,
+          reason: error instanceof Error ? error.message : 'unknown error'
+        });
+        // Continue with next session - don't let one failure break the entire restore
+      }
+    }
+
+    logger.info(
+      `Restored ${restoredCount}/${sessions.length} session(s) from persistence`
+    );
+    return restoredCount;
   }
 }
 

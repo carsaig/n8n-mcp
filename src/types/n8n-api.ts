@@ -1,6 +1,16 @@
 // n8n API Types - Ported from n8n-manager-for-ai-agents
 // These types define the structure of n8n API requests and responses
 
+// Resource Locator Types
+export interface ResourceLocatorValue {
+  __rl: true;
+  value: string;
+  mode: 'id' | 'url' | 'expression' | string;
+}
+
+// Expression Format Types
+export type ExpressionValue = string | ResourceLocatorValue;
+
 // Workflow Node Types
 export interface WorkflowNode {
   id: string;
@@ -20,6 +30,7 @@ export interface WorkflowNode {
   waitBetweenTries?: number;
   alwaysOutputData?: boolean;
   executeOnce?: boolean;
+  webhookId?: string; // n8n assigns this for webhook/form/chat trigger nodes
 }
 
 export interface WorkflowConnection {
@@ -46,6 +57,7 @@ export interface WorkflowSettings {
 export interface Workflow {
   id?: string;
   name: string;
+  description?: string; // Returned by GET but must be excluded from PUT/PATCH (n8n API limitation, Issue #431)
   nodes: WorkflowNode[];
   connections: WorkflowConnection;
   active?: boolean; // Optional for creation as it's read-only
@@ -56,6 +68,7 @@ export interface Workflow {
   updatedAt?: string;
   createdAt?: string;
   versionId?: string;
+  versionCounter?: number; // Added: n8n 1.118.1+ returns this in GET responses
   meta?: {
     instanceId?: string;
   };
@@ -142,6 +155,7 @@ export interface WorkflowExport {
   tags?: string[];
   pinData?: Record<string, unknown>;
   versionId?: string;
+  versionCounter?: number; // Added: n8n 1.118.1+
   meta?: Record<string, unknown>;
 }
 
@@ -211,12 +225,34 @@ export interface HealthCheckResponse {
   };
 }
 
+// n8n Version Information
+export interface N8nVersionInfo {
+  version: string;          // Full version string, e.g., "1.119.0"
+  major: number;            // Major version number
+  minor: number;            // Minor version number
+  patch: number;            // Patch version number
+}
+
+// Settings data within the response
+export interface N8nSettingsData {
+  n8nVersion?: string;
+  versionCli?: string;
+  instanceId?: string;
+  [key: string]: unknown;
+}
+
+// Response from /rest/settings endpoint (unauthenticated)
+// The actual response wraps settings in a "data" property
+export interface N8nSettingsResponse {
+  data?: N8nSettingsData;
+}
+
 // Request Parameter Types
 export interface WorkflowListParams {
   limit?: number;
   cursor?: string;
   active?: boolean;
-  tags?: string[] | null;
+  tags?: string | null;  // Comma-separated string per n8n API spec
   projectId?: string;
   excludePinnedData?: boolean;
   instance?: string;
@@ -280,4 +316,86 @@ export interface McpToolResponse {
   message?: string;
   code?: string;
   details?: Record<string, unknown>;
+  executionId?: string;
+  workflowId?: string;
+}
+
+// Execution Filtering Types
+export type ExecutionMode = 'preview' | 'summary' | 'filtered' | 'full';
+
+export interface ExecutionPreview {
+  totalNodes: number;
+  executedNodes: number;
+  estimatedSizeKB: number;
+  nodes: Record<string, NodePreview>;
+}
+
+export interface NodePreview {
+  status: 'success' | 'error';
+  itemCounts: {
+    input: number;
+    output: number;
+  };
+  dataStructure: Record<string, any>;
+  estimatedSizeKB: number;
+  error?: string;
+}
+
+export interface ExecutionRecommendation {
+  canFetchFull: boolean;
+  suggestedMode: ExecutionMode;
+  suggestedItemsLimit?: number;
+  reason: string;
+}
+
+export interface ExecutionFilterOptions {
+  mode?: ExecutionMode;
+  nodeNames?: string[];
+  itemsLimit?: number;
+  includeInputData?: boolean;
+  fieldsToInclude?: string[];
+}
+
+export interface FilteredExecutionResponse {
+  id: string;
+  workflowId: string;
+  status: ExecutionStatus;
+  mode: ExecutionMode;
+  startedAt: string;
+  stoppedAt?: string;
+  duration?: number;
+  finished: boolean;
+
+  // Preview-specific data
+  preview?: ExecutionPreview;
+  recommendation?: ExecutionRecommendation;
+
+  // Summary/Filtered data
+  summary?: {
+    totalNodes: number;
+    executedNodes: number;
+    totalItems: number;
+    hasMoreData: boolean;
+  };
+  nodes?: Record<string, FilteredNodeData>;
+
+  // Error information
+  error?: Record<string, unknown>;
+}
+
+export interface FilteredNodeData {
+  executionTime?: number;
+  itemsInput: number;
+  itemsOutput: number;
+  status: 'success' | 'error';
+  error?: string;
+  data?: {
+    input?: any[][];
+    output?: any[][];
+    metadata: {
+      totalItems: number;
+      itemsShown: number;
+      truncated: boolean;
+    };
+  };
 }
