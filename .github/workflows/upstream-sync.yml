@@ -84,7 +84,7 @@ jobs:
           if ! git merge --no-ff --no-edit "${OID}"; then
             echo "Merge conflict while preparing ${BRANCH}. Applying fork-vs-upstream resolution policy..." >&2
             # Keep fork-specific workflows and deployment setup
-            git checkout --ours -- .github/workflows Dockerfile src/http-server.ts src/mcp/server.ts AGENTS.md CLAUDE.md || true
+            git checkout --ours -- .github/workflows Dockerfile src/http-server.ts src/http-server-single-session.ts src/mcp/index.ts src/mcp/server.ts src/mcp/handlers-n8n-manager.ts src/mcp/handlers-workflow-diff.ts AGENTS.md CLAUDE.md || true
             # Take upstream for the rest of the known conflict set
             git checkout --theirs -- MEMORY_N8N_UPDATE.md README.md docs/CHANGELOG.md package-lock.json package.json || true
             git add -A
