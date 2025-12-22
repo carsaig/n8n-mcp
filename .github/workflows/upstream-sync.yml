@@ -194,8 +194,21 @@ jobs:
             "https://api.github.com/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/labels" \
             -d '{"labels":["dependencies","upstream-sync"]}' >/dev/null || true
 
-      - name: Enable PR auto-merge (squash) once checks pass
+      - name: Check auto-merge setting
+        id: automerge
         if: steps.diffcheck.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number && steps.cpr.outputs.pull-request-number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+          ALLOW=$(curl -sSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}" | jq -r '.allow_auto_merge // false')
+          echo "allow_auto_merge=${ALLOW}" >> "$GITHUB_OUTPUT"
+
+      - name: Enable PR auto-merge (squash) once checks pass
+        if: steps.diffcheck.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number && steps.cpr.outputs.pull-request-number != '' && steps.automerge.outputs.allow_auto_merge == 'true'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
