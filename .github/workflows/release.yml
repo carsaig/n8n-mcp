@@ -2,6 +2,8 @@ name: Release (ARM64) to GHCR + Coolify
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
