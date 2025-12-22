@@ -97,12 +97,12 @@ export class ExpressionValidator {
       errors.push('Unmatched expression brackets {{ }}');
     }
 
-    // Check for nested expressions (not supported in n8n)
-    if (expression.includes('{{') && expression.includes('{{', expression.indexOf('{{') + 2)) {
-      const match = expression.match(/\{\{.*\{\{/);
-      if (match) {
-        errors.push('Nested expressions are not supported');
-      }
+    // Check for truly nested expressions (not supported in n8n)
+    // This means {{ inside another {{ }}, like {{ {{ $json }} }}
+    // NOT multiple expressions like {{ $json.a }} text {{ $json.b }} (which is valid)
+    const nestedPattern = /\{\{[^}]*\{\{/;
+    if (nestedPattern.test(expression)) {
+      errors.push('Nested expressions are not supported (expression inside another expression)');
     }
 
     // Check for empty expressions
@@ -141,10 +141,19 @@ export class ExpressionValidator {
     const jsonPattern = new RegExp(this.VARIABLE_PATTERNS.json.source, this.VARIABLE_PATTERNS.json.flags);
     while ((match = jsonPattern.exec(expr)) !== null) {
       result.usedVariables.add('$json');
-      
+
       if (!context.hasInputData && !context.isInLoop) {
         result.warnings.push(
           'Using $json but node might not have input data'
+        );
+      }
+
+      // Check for suspicious property names that might be test/invalid data
+      const fullMatch = match[0];
+      if (fullMatch.includes('.invalid') || fullMatch.includes('.undefined') ||
+          fullMatch.includes('.null') || fullMatch.includes('.test')) {
+        result.warnings.push(
+          `Property access '${fullMatch}' looks suspicious - verify this property exists in your data`
         );
       }
     }
@@ -198,8 +207,14 @@ export class ExpressionValidator {
     expr: string,
     result: ExpressionValidationResult
   ): void {
-    // Check for missing $ prefix - but exclude cases where $ is already present
-    const missingPrefixPattern = /(?<!\$)\b(json|node|input|items|workflow|execution)\b(?!\s*:)/;
+    // Check for missing $ prefix - but exclude cases where $ is already present OR it's property access (e.g., .json)
+    // The pattern now excludes:
+    // - Immediately preceded by $ (e.g., $json) - handled by (?<!\$)
+    // - Preceded by a dot (e.g., .json in $('Node').item.json.field) - handled by (?<!\.)
+    // - Inside word characters (e.g., myJson) - handled by (?<!\w)
+    // - Inside bracket notation (e.g., ['json']) - handled by (?<![)
+    // - After opening bracket or quote (e.g., "json" or ['json'])
+    const missingPrefixPattern = /(?<![.$\w['])\b(json|node|input|items|workflow|execution)\b(?!\s*[:''])/;
     if (expr.match(missingPrefixPattern)) {
       result.warnings.push(
         'Possible missing $ prefix for variable (e.g., use $json instead of json)'

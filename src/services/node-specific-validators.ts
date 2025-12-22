@@ -234,17 +234,11 @@ export class NodeSpecificValidators {
   static validateGoogleSheets(context: NodeValidationContext): void {
     const { config, errors, warnings, suggestions } = context;
     const { operation } = config;
-    
-    // Common validations
-    if (!config.sheetId && !config.documentId) {
-      errors.push({
-        type: 'missing_required',
-        property: 'sheetId',
-        message: 'Spreadsheet ID is required',
-        fix: 'Provide the Google Sheets document ID from the URL'
-      });
-    }
-    
+
+    // NOTE: Skip sheetId validation - it comes from credentials, not configuration
+    // In real workflows, sheetId is provided by Google Sheets credentials
+    // See Phase 3 validation results: 113/124 failures were false positives for this
+
     // Operation-specific validations
     switch (operation) {
       case 'append':
@@ -260,22 +254,43 @@ export class NodeSpecificValidators {
         this.validateGoogleSheetsDelete(context);
         break;
     }
-    
+
     // Range format validation
     if (config.range) {
       this.validateGoogleSheetsRange(config.range, errors, warnings);
     }
+
+    // FINAL STEP: Filter out sheetId errors (credential-provided field)
+    // Remove any sheetId validation errors that might have been added by nested validators
+    const filteredErrors: ValidationError[] = [];
+    for (const error of errors) {
+      // Skip sheetId errors - this field is provided by credentials
+      if (error.property === 'sheetId' && error.type === 'missing_required') {
+        continue;
+      }
+      // Skip errors about sheetId in nested paths (e.g., from resourceMapper validation)
+      if (error.property && error.property.includes('sheetId') && error.type === 'missing_required') {
+        continue;
+      }
+      filteredErrors.push(error);
+    }
+
+    // Replace errors array with filtered version
+    errors.length = 0;
+    errors.push(...filteredErrors);
   }
   
   private static validateGoogleSheetsAppend(context: NodeValidationContext): void {
     const { config, errors, warnings, autofix } = context;
-    
-    if (!config.range) {
+
+    // In Google Sheets v4+, range is only required if NOT using the columns resourceMapper
+    // The columns parameter is a resourceMapper introduced in v4 that handles range automatically
+    if (!config.range && !config.columns) {
       errors.push({
         type: 'missing_required',
         property: 'range',
-        message: 'Range is required for append operation',
-        fix: 'Specify range like "Sheet1!A:B" or "Sheet1!A1:B10"'
+        message: 'Range or columns mapping is required for append operation',
+        fix: 'Specify range like "Sheet1!A:B" OR use columns with mappingMode'
       });
     }
     
@@ -716,9 +731,110 @@ export class NodeSpecificValidators {
       });
     }
   }
-  
+
   /**
-   * Validate MySQL node configuration  
+   * Validate AI Agent node configuration
+   * Note: This provides basic model connection validation at the node level.
+   * Full AI workflow validation (tools, memory, etc.) is handled by workflow-validator.
+   */
+  static validateAIAgent(context: NodeValidationContext): void {
+    const { config, errors, warnings, suggestions, autofix } = context;
+
+    // Check for language model configuration
+    // AI Agent nodes receive model connections via ai_languageModel connection type
+    // We validate this during workflow validation, but provide hints here for common issues
+
+    // Check prompt type configuration
+    if (config.promptType === 'define') {
+      if (!config.text || (typeof config.text === 'string' && config.text.trim() === '')) {
+        errors.push({
+          type: 'missing_required',
+          property: 'text',
+          message: 'Custom prompt text is required when promptType is "define"',
+          fix: 'Provide a custom prompt in the text field, or change promptType to "auto"'
+        });
+      }
+    }
+
+    // Check system message (RECOMMENDED)
+    if (!config.systemMessage || (typeof config.systemMessage === 'string' && config.systemMessage.trim() === '')) {
+      suggestions.push('AI Agent works best with a system message that defines the agent\'s role, capabilities, and constraints. Set systemMessage to provide context.');
+    } else if (typeof config.systemMessage === 'string' && config.systemMessage.trim().length < 20) {
+      warnings.push({
+        type: 'inefficient',
+        property: 'systemMessage',
+        message: 'System message is very short (< 20 characters)',
+        suggestion: 'Consider a more detailed system message to guide the agent\'s behavior'
+      });
+    }
+
+    // Check output parser configuration
+    if (config.hasOutputParser === true) {
+      warnings.push({
+        type: 'best_practice',
+        property: 'hasOutputParser',
+        message: 'Output parser is enabled. Ensure an ai_outputParser connection is configured in the workflow.',
+        suggestion: 'Connect an output parser node (e.g., Structured Output Parser) via ai_outputParser connection type'
+      });
+    }
+
+    // Check fallback model configuration
+    if (config.needsFallback === true) {
+      warnings.push({
+        type: 'best_practice',
+        property: 'needsFallback',
+        message: 'Fallback model is enabled. Ensure 2 language models are connected via ai_languageModel connections.',
+        suggestion: 'Connect a primary model and a fallback model to handle failures gracefully'
+      });
+    }
+
+    // Check maxIterations
+    if (config.maxIterations !== undefined) {
+      const maxIter = Number(config.maxIterations);
+      if (isNaN(maxIter) || maxIter < 1) {
+        errors.push({
+          type: 'invalid_value',
+          property: 'maxIterations',
+          message: 'maxIterations must be a positive number',
+          fix: 'Set maxIterations to a value >= 1 (e.g., 10)'
+        });
+      } else if (maxIter > 50) {
+        warnings.push({
+          type: 'inefficient',
+          property: 'maxIterations',
+          message: `maxIterations is set to ${maxIter}. High values can lead to long execution times and high costs.`,
+          suggestion: 'Consider reducing maxIterations to 10-20 for most use cases'
+        });
+      }
+    }
+
+    // Error handling for AI operations
+    if (!config.onError && !config.retryOnFail && !config.continueOnFail) {
+      warnings.push({
+        type: 'best_practice',
+        property: 'errorHandling',
+        message: 'AI models can fail due to API limits, rate limits, or invalid responses',
+        suggestion: 'Add onError: "continueRegularOutput" with retryOnFail for resilience'
+      });
+      autofix.onError = 'continueRegularOutput';
+      autofix.retryOnFail = true;
+      autofix.maxTries = 2;
+      autofix.waitBetweenTries = 5000; // AI models may have rate limits
+    }
+
+    // Check for deprecated continueOnFail
+    if (config.continueOnFail !== undefined) {
+      warnings.push({
+        type: 'deprecated',
+        property: 'continueOnFail',
+        message: 'continueOnFail is deprecated. Use onError instead',
+        suggestion: 'Replace with onError: "continueRegularOutput" or "stopWorkflow"'
+      });
+    }
+  }
+
+  /**
+   * Validate MySQL node configuration
    */
   static validateMySQL(context: NodeValidationContext): void {
     const { config, errors, warnings, suggestions } = context;
@@ -1036,16 +1152,9 @@ export class NodeSpecificValidators {
       delete autofix.continueOnFail;
     }
     
-    // Response mode validation
-    if (responseMode === 'responseNode' && !config.onError && !config.continueOnFail) {
-      errors.push({
-        type: 'invalid_configuration',
-        property: 'responseMode',
-        message: 'responseNode mode requires onError: "continueRegularOutput"',
-        fix: 'Set onError to ensure response is always sent'
-      });
-    }
-    
+    // Note: responseNode mode validation moved to workflow-validator.ts
+    // where it has access to node-level onError property (not just config/parameters)
+
     // Always output data for debugging
     if (!config.alwaysOutputData) {
       suggestions.push('Enable alwaysOutputData to debug webhook payloads');
@@ -1132,8 +1241,11 @@ export class NodeSpecificValidators {
     const syntaxPatterns = [
       { pattern: /const\s+const/, message: 'Duplicate const declaration' },
       { pattern: /let\s+let/, message: 'Duplicate let declaration' },
-      { pattern: /\)\s*\)\s*{/, message: 'Extra closing parenthesis before {' },
-      { pattern: /}\s*}$/, message: 'Extra closing brace at end' }
+      // Removed overly simplistic parenthesis check - it was causing false positives
+      // for valid patterns like $('NodeName').first().json or func()()
+      // { pattern: /\)\s*\)\s*{/, message: 'Extra closing parenthesis before {' },
+      // Only check for multiple closing braces at the very end (more likely to be an error)
+      { pattern: /}\s*}\s*}\s*}$/, message: 'Multiple closing braces at end - check your nesting' }
     ];
     
     syntaxPatterns.forEach(({ pattern, message }) => {
@@ -1553,4 +1665,60 @@ export class NodeSpecificValidators {
       });
     }
   }
+
+  /**
+   * Validate Set node configuration
+   */
+  static validateSet(context: NodeValidationContext): void {
+    const { config, errors, warnings } = context;
+
+    // Validate jsonOutput when present (used in JSON mode or when directly setting JSON)
+    if (config.jsonOutput !== undefined && config.jsonOutput !== null && config.jsonOutput !== '') {
+      try {
+        const parsed = JSON.parse(config.jsonOutput);
+
+        // Set node with JSON input expects an OBJECT {}, not an ARRAY []
+        // This is a common mistake that n8n UI catches but our validator should too
+        if (Array.isArray(parsed)) {
+          errors.push({
+            type: 'invalid_value',
+            property: 'jsonOutput',
+            message: 'Set node expects a JSON object {}, not an array []',
+            fix: 'Either wrap array items as object properties: {"items": [...]}, OR use a different approach for multiple items'
+          });
+        }
+
+        // Warn about empty objects
+        if (typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) {
+          warnings.push({
+            type: 'inefficient',
+            property: 'jsonOutput',
+            message: 'jsonOutput is an empty object - this node will output no data',
+            suggestion: 'Add properties to the object or remove this node if not needed'
+          });
+        }
+      } catch (e) {
+        errors.push({
+          type: 'syntax_error',
+          property: 'jsonOutput',
+          message: `Invalid JSON in jsonOutput: ${e instanceof Error ? e.message : 'Syntax error'}`,
+          fix: 'Ensure jsonOutput contains valid JSON syntax'
+        });
+      }
+    }
+
+    // Validate mode-specific requirements
+    if (config.mode === 'manual') {
+      // In manual mode, at least one field should be defined
+      const hasFields = config.values && Object.keys(config.values).length > 0;
+      if (!hasFields && !config.jsonOutput) {
+        warnings.push({
+          type: 'missing_common',
+          message: 'Set node has no fields configured - will output empty items',
+          suggestion: 'Add fields in the Values section or use JSON mode'
+        });
+      }
+    }
+  }
+
 }

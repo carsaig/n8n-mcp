@@ -8,6 +8,7 @@ import { N8nNodeLoader } from '../loaders/node-loader';
 import { NodeParser, ParsedNode } from '../parsers/node-parser';
 import { DocsMapper } from '../mappers/docs-mapper';
 import { NodeRepository } from '../database/node-repository';
+import { ToolVariantGenerator } from '../services/tool-variant-generator';
 import { TemplateSanitizer } from '../utils/template-sanitizer';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -21,6 +22,7 @@ async function rebuild() {
   const parser = new NodeParser();
   const mapper = new DocsMapper();
   const repository = new NodeRepository(db);
+  const toolVariantGenerator = new ToolVariantGenerator();
   
   // Initialize database
   const schema = fs.readFileSync(path.join(__dirname, '../../src/database/schema.sql'), 'utf8');
@@ -43,7 +45,8 @@ async function rebuild() {
     webhooks: 0,
     withProperties: 0,
     withOperations: 0,
-    withDocs: 0
+    withDocs: 0,
+    toolVariants: 0
   };
   
   // Process each node (documentation fetching must be outside transaction due to async)
@@ -54,21 +57,38 @@ async function rebuild() {
     try {
       // Parse node
       const parsed = parser.parse(NodeClass, packageName);
-      
+
       // Validate parsed data
       if (!parsed.nodeType || !parsed.displayName) {
         throw new Error(`Missing required fields - nodeType: ${parsed.nodeType}, displayName: ${parsed.displayName}, packageName: ${parsed.packageName}`);
       }
-      
+
       // Additional validation for required fields
       if (!parsed.packageName) {
         throw new Error(`Missing packageName for node ${nodeName}`);
       }
-      
+
       // Get documentation
       const docs = await mapper.fetchDocumentation(parsed.nodeType);
       parsed.documentation = docs || undefined;
-      
+
+      // Generate Tool variant for nodes with usableAsTool: true
+      if (parsed.isAITool && !parsed.isTrigger) {
+        const toolVariant = toolVariantGenerator.generateToolVariant(parsed);
+        if (toolVariant) {
+          // Mark base node as having a Tool variant
+          parsed.hasToolVariant = true;
+
+          // Add Tool variant to processed nodes
+          processedNodes.push({
+            parsed: toolVariant,
+            docs: undefined, // Tool variants don't have separate docs
+            nodeName: `${nodeName}Tool`
+          });
+          stats.toolVariants++;
+        }
+      }
+
       processedNodes.push({ parsed, docs: docs || undefined, nodeName });
     } catch (error) {
       stats.failed++;
@@ -127,6 +147,7 @@ async function rebuild() {
   console.log(`   Successful: ${stats.successful}`);
   console.log(`   Failed: ${stats.failed}`);
   console.log(`   AI Tools: ${stats.aiTools}`);
+  console.log(`   Tool Variants: ${stats.toolVariants}`);
   console.log(`   Triggers: ${stats.triggers}`);
   console.log(`   Webhooks: ${stats.webhooks}`);
   console.log(`   With Properties: ${stats.withProperties}`);
@@ -165,31 +186,94 @@ async function rebuild() {
   db.close();
 }
 
+// Expected minimum based on n8n v1.123.4 AI-capable nodes
+const MIN_EXPECTED_TOOL_VARIANTS = 200;
+
 function validateDatabase(repository: NodeRepository): { passed: boolean; issues: string[] } {
   const issues = [];
-  
-  // Check critical nodes
-  const criticalNodes = ['nodes-base.httpRequest', 'nodes-base.code', 'nodes-base.webhook', 'nodes-base.slack'];
-  
-  for (const nodeType of criticalNodes) {
-    const node = repository.getNode(nodeType);
-    
-    if (!node) {
-      issues.push(`Critical node ${nodeType} not found`);
-      continue;
+
+  try {
+    const db = (repository as any).db;
+
+    // CRITICAL: Check if database has any nodes at all
+    const nodeCount = db.prepare('SELECT COUNT(*) as count FROM nodes').get() as { count: number };
+    if (nodeCount.count === 0) {
+      issues.push('CRITICAL: Database is empty - no nodes found! Rebuild failed or was interrupted.');
+      return { passed: false, issues };
     }
-    
-    if (node.properties.length === 0) {
-      issues.push(`Node ${nodeType} has no properties`);
+
+    // Check minimum expected node count (should have at least 500 nodes from both packages)
+    if (nodeCount.count < 500) {
+      issues.push(`WARNING: Only ${nodeCount.count} nodes found - expected at least 500 (both n8n packages)`);
     }
+
+    // Check critical nodes
+    const criticalNodes = ['nodes-base.httpRequest', 'nodes-base.code', 'nodes-base.webhook', 'nodes-base.slack'];
+
+    for (const nodeType of criticalNodes) {
+      const node = repository.getNode(nodeType);
+
+      if (!node) {
+        issues.push(`Critical node ${nodeType} not found`);
+        continue;
+      }
+
+      if (node.properties.length === 0) {
+        issues.push(`Node ${nodeType} has no properties`);
+      }
+    }
+
+    // Check AI tools
+    const aiTools = repository.getAITools();
+    if (aiTools.length === 0) {
+      issues.push('No AI tools found - check detection logic');
+    }
+
+    // Check Tool variants
+    const toolVariantCount = repository.getToolVariantCount();
+    if (toolVariantCount === 0) {
+      issues.push('No Tool variants found - check ToolVariantGenerator');
+    } else if (toolVariantCount < MIN_EXPECTED_TOOL_VARIANTS) {
+      issues.push(`Only ${toolVariantCount} Tool variants found - expected at least ${MIN_EXPECTED_TOOL_VARIANTS}`);
+    }
+
+    // Check FTS5 table existence and population
+    const ftsTableCheck = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type='table' AND name='nodes_fts'
+    `).get();
+
+    if (!ftsTableCheck) {
+      issues.push('CRITICAL: FTS5 table (nodes_fts) does not exist - searches will fail or be very slow');
+    } else {
+      // Check if FTS5 table is properly populated
+      const ftsCount = db.prepare('SELECT COUNT(*) as count FROM nodes_fts').get() as { count: number };
+
+      if (ftsCount.count === 0) {
+        issues.push('CRITICAL: FTS5 index is empty - searches will return zero results');
+      } else if (nodeCount.count !== ftsCount.count) {
+        issues.push(`FTS5 index out of sync: ${nodeCount.count} nodes but ${ftsCount.count} FTS5 entries`);
+      }
+
+      // Verify critical nodes are searchable via FTS5
+      const searchableNodes = ['webhook', 'merge', 'split'];
+      for (const searchTerm of searchableNodes) {
+        const searchResult = db.prepare(`
+          SELECT COUNT(*) as count FROM nodes_fts
+          WHERE nodes_fts MATCH ?
+        `).get(searchTerm);
+
+        if (searchResult.count === 0) {
+          issues.push(`CRITICAL: Search for "${searchTerm}" returns zero results in FTS5 index`);
+        }
+      }
+    }
+  } catch (error) {
+    // Catch any validation errors
+    const errorMessage = (error as Error).message;
+    issues.push(`Validation error: ${errorMessage}`);
   }
-  
-  // Check AI tools
-  const aiTools = repository.getAITools();
-  if (aiTools.length === 0) {
-    issues.push('No AI tools found - check detection logic');
-  }
-  
+
   return {
     passed: issues.length === 0,
     issues

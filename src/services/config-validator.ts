@@ -1,9 +1,11 @@
 /**
  * Configuration Validator Service
- * 
+ *
  * Validates node configurations to catch errors before execution.
  * Provides helpful suggestions and identifies missing or misconfigured properties.
  */
+
+import { shouldSkipLiteralValidation } from '../utils/expression-utils.js';
 
 export interface ValidationResult {
   valid: boolean;
@@ -19,7 +21,9 @@ export interface ValidationError {
   type: 'missing_required' | 'invalid_type' | 'invalid_value' | 'incompatible' | 'invalid_configuration' | 'syntax_error';
   property: string;
   message: string;
-  fix?: string;}
+  fix?: string;
+  suggestion?: string;
+}
 
 export interface ValidationWarning {
   type: 'missing_common' | 'deprecated' | 'inefficient' | 'security' | 'best_practice' | 'invalid_value';
@@ -30,12 +34,18 @@ export interface ValidationWarning {
 
 export class ConfigValidator {
   /**
+   * UI-only property types that should not be validated as configuration
+   */
+  private static readonly UI_ONLY_TYPES = ['notice', 'callout', 'infoBox', 'info'];
+
+  /**
    * Validate a node configuration
    */
   static validate(
-    nodeType: string, 
-    config: Record<string, any>, 
-    properties: any[]
+    nodeType: string,
+    config: Record<string, any>,
+    properties: any[],
+    userProvidedKeys?: Set<string> // NEW: Track user-provided properties to avoid warning about defaults
   ): ValidationResult {
     // Input validation
     if (!config || typeof config !== 'object') {
@@ -44,7 +54,7 @@ export class ConfigValidator {
     if (!properties || !Array.isArray(properties)) {
       throw new TypeError('Properties must be a non-null array');
     }
-    
+
     const errors: ValidationError[] = [];
     const warnings: ValidationWarning[] = [];
     const suggestions: string[] = [];
@@ -67,8 +77,8 @@ export class ConfigValidator {
     this.performNodeSpecificValidation(nodeType, config, errors, warnings, suggestions, autofix);
     
     // Check for common issues
-    this.checkCommonIssues(nodeType, config, properties, warnings, suggestions);
-    
+    this.checkCommonIssues(nodeType, config, properties, warnings, suggestions, userProvidedKeys);
+
     // Security checks
     this.performSecurityChecks(nodeType, config, warnings);
     
@@ -106,16 +116,16 @@ export class ConfigValidator {
    * Check for missing required properties
    */
   private static checkRequiredProperties(
-    properties: any[], 
-    config: Record<string, any>, 
+    properties: any[],
+    config: Record<string, any>,
     errors: ValidationError[]
   ): void {
     for (const prop of properties) {
       if (!prop || !prop.name) continue; // Skip invalid properties
-      
+
       if (prop.required) {
         const value = config[prop.name];
-        
+
         // Check if property is missing or has null/undefined value
         if (!(prop.name in config)) {
           errors.push({
@@ -129,6 +139,14 @@ export class ConfigValidator {
             type: 'invalid_type',
             property: prop.name,
             message: `Required property '${prop.displayName || prop.name}' cannot be null or undefined`,
+            fix: `Provide a valid value for ${prop.name}`
+          });
+        } else if (typeof value === 'string' && value.trim() === '') {
+          // Check for empty strings which are invalid for required string properties
+          errors.push({
+            type: 'missing_required',
+            property: prop.name,
+            message: `Required property '${prop.displayName || prop.name}' cannot be empty`,
             fix: `Provide a valid value for ${prop.name}`
           });
         }
@@ -158,35 +176,107 @@ export class ConfigValidator {
   }
   
   /**
-   * Check if a property is visible given current config
+   * Evaluate a single _cnd conditional operator from n8n displayOptions.
+   * Supports: eq, not, gte, lte, gt, lt, between, startsWith, endsWith, includes, regex, exists
    */
-  protected static isPropertyVisible(prop: any, config: Record<string, any>): boolean {
+  private static evaluateCondition(
+    condition: { _cnd: Record<string, any> },
+    configValue: any
+  ): boolean {
+    const cnd = condition._cnd;
+
+    if ('eq' in cnd) return configValue === cnd.eq;
+    if ('not' in cnd) return configValue !== cnd.not;
+    if ('gte' in cnd) return configValue >= cnd.gte;
+    if ('lte' in cnd) return configValue <= cnd.lte;
+    if ('gt' in cnd) return configValue > cnd.gt;
+    if ('lt' in cnd) return configValue < cnd.lt;
+    if ('between' in cnd) {
+      const between = cnd.between;
+      if (!between || typeof between.from === 'undefined' || typeof between.to === 'undefined') {
+        return false; // Invalid between structure
+      }
+      return configValue >= between.from && configValue <= between.to;
+    }
+    if ('startsWith' in cnd) {
+      return typeof configValue === 'string' && configValue.startsWith(cnd.startsWith);
+    }
+    if ('endsWith' in cnd) {
+      return typeof configValue === 'string' && configValue.endsWith(cnd.endsWith);
+    }
+    if ('includes' in cnd) {
+      return typeof configValue === 'string' && configValue.includes(cnd.includes);
+    }
+    if ('regex' in cnd) {
+      if (typeof configValue !== 'string') return false;
+      try {
+        return new RegExp(cnd.regex).test(configValue);
+      } catch {
+        return false; // Invalid regex pattern
+      }
+    }
+    if ('exists' in cnd) {
+      return configValue !== undefined && configValue !== null;
+    }
+
+    // Unknown operator - default to not matching (conservative)
+    return false;
+  }
+
+  /**
+   * Check if a config value matches an expected value.
+   * Handles both plain values and _cnd conditional operators.
+   */
+  private static valueMatches(expectedValue: any, configValue: any): boolean {
+    // Check if this is a _cnd conditional
+    if (expectedValue && typeof expectedValue === 'object' && '_cnd' in expectedValue) {
+      return this.evaluateCondition(expectedValue, configValue);
+    }
+    // Plain value comparison
+    return configValue === expectedValue;
+  }
+
+  /**
+   * Check if a property is visible given current config.
+   * Supports n8n's _cnd conditional operators in displayOptions.
+   */
+  public static isPropertyVisible(prop: any, config: Record<string, any>): boolean {
     if (!prop.displayOptions) return true;
-    
-    // Check show conditions
+
+    // Check show conditions - property visible only if ALL conditions match
     if (prop.displayOptions.show) {
       for (const [key, values] of Object.entries(prop.displayOptions.show)) {
         const configValue = config[key];
         const expectedValues = Array.isArray(values) ? values : [values];
-        
-        if (!expectedValues.includes(configValue)) {
+
+        // Check if ANY expected value matches (OR logic within a key)
+        const anyMatch = expectedValues.some(expected =>
+          this.valueMatches(expected, configValue)
+        );
+
+        if (!anyMatch) {
           return false;
         }
       }
     }
-    
-    // Check hide conditions
+
+    // Check hide conditions - property hidden if ANY condition matches
     if (prop.displayOptions.hide) {
       for (const [key, values] of Object.entries(prop.displayOptions.hide)) {
         const configValue = config[key];
         const expectedValues = Array.isArray(values) ? values : [values];
-        
-        if (expectedValues.includes(configValue)) {
+
+        // Check if ANY expected value matches (property should be hidden)
+        const anyMatch = expectedValues.some(expected =>
+          this.valueMatches(expected, configValue)
+        );
+
+        if (anyMatch) {
           return false;
         }
       }
     }
-    
+
     return true;
   }
   
@@ -224,8 +314,86 @@ export class ConfigValidator {
           message: `Property '${key}' must be a boolean, got ${typeof value}`,
           fix: `Change ${key} to true or false`
         });
+      } else if (prop.type === 'resourceLocator') {
+        // resourceLocator validation: Used by AI model nodes (OpenAI, Anthropic, etc.)
+        // Must be an object with required properties:
+        //   - mode: string ('list' | 'id' | 'url')
+        //   - value: any (the actual model/resource identifier)
+        // Common mistake: passing string directly instead of object structure
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+          const fixValue = typeof value === 'string' ? value : JSON.stringify(value);
+          errors.push({
+            type: 'invalid_type',
+            property: key,
+            message: `Property '${key}' is a resourceLocator and must be an object with 'mode' and 'value' properties, got ${typeof value}`,
+            fix: `Change ${key} to { mode: "list", value: ${JSON.stringify(fixValue)} } or { mode: "id", value: ${JSON.stringify(fixValue)} }`
+          });
+        } else {
+          // Check required properties
+          if (!value.mode) {
+            errors.push({
+              type: 'missing_required',
+              property: `${key}.mode`,
+              message: `resourceLocator '${key}' is missing required property 'mode'`,
+              fix: `Add mode property: { mode: "list", value: ${JSON.stringify(value.value || '')} }`
+            });
+          } else if (typeof value.mode !== 'string') {
+            errors.push({
+              type: 'invalid_type',
+              property: `${key}.mode`,
+              message: `resourceLocator '${key}.mode' must be a string, got ${typeof value.mode}`,
+              fix: `Set mode to a valid string value`
+            });
+          } else if (prop.modes) {
+            // Schema-based validation: Check if mode exists in the modes definition
+            // In n8n, modes are defined at the top level of resourceLocator properties
+            // Modes can be defined in different ways:
+            // 1. Array of mode objects: [{name: 'list', ...}, {name: 'id', ...}, {name: 'name', ...}]
+            // 2. Object with mode keys: { list: {...}, id: {...}, url: {...}, name: {...} }
+            const modes = prop.modes;
+
+            // Validate modes structure before processing to prevent crashes
+            if (!modes || typeof modes !== 'object') {
+              // Invalid schema structure - skip validation to prevent false positives
+              continue;
+            }
+
+            let allowedModes: string[] = [];
+
+            if (Array.isArray(modes)) {
+              // Array format (most common in n8n): extract name property from each mode object
+              allowedModes = modes
+                .map(m => (typeof m === 'object' && m !== null) ? m.name : m)
+                .filter(m => typeof m === 'string' && m.length > 0);
+            } else {
+              // Object format: extract keys as mode names
+              allowedModes = Object.keys(modes).filter(k => k.length > 0);
+            }
+
+            // Only validate if we successfully extracted modes
+            if (allowedModes.length > 0 && !allowedModes.includes(value.mode)) {
+              errors.push({
+                type: 'invalid_value',
+                property: `${key}.mode`,
+                message: `resourceLocator '${key}.mode' must be one of [${allowedModes.join(', ')}], got '${value.mode}'`,
+                fix: `Change mode to one of: ${allowedModes.join(', ')}`
+              });
+            }
+          }
+          // If no modes defined at property level, skip mode validation
+          // This prevents false positives for nodes with dynamic/runtime-determined modes
+
+          if (value.value === undefined) {
+            errors.push({
+              type: 'missing_required',
+              property: `${key}.value`,
+              message: `resourceLocator '${key}' is missing required property 'value'`,
+              fix: `Add value property to specify the ${prop.displayName || key}`
+            });
+          }
+        }
       }
-      
+
       // Options validation
       if (prop.type === 'options' && prop.options) {
         const validValues = prop.options.map((opt: any) => 
@@ -287,13 +455,16 @@ export class ConfigValidator {
   ): void {
     // URL validation
     if (config.url && typeof config.url === 'string') {
-      if (!config.url.startsWith('http://') && !config.url.startsWith('https://')) {
-        errors.push({
-          type: 'invalid_value',
-          property: 'url',
-          message: 'URL must start with http:// or https://',
-          fix: 'Add https:// to the beginning of your URL'
-        });
+      // Skip validation for expressions - they will be evaluated at runtime
+      if (!shouldSkipLiteralValidation(config.url)) {
+        if (!config.url.startsWith('http://') && !config.url.startsWith('https://')) {
+          errors.push({
+            type: 'invalid_value',
+            property: 'url',
+            message: 'URL must start with http:// or https://',
+            fix: 'Add https:// to the beginning of your URL'
+          });
+        }
       }
     }
     
@@ -323,15 +494,19 @@ export class ConfigValidator {
     
     // JSON body validation
     if (config.sendBody && config.contentType === 'json' && config.jsonBody) {
-      try {
-        JSON.parse(config.jsonBody);
-      } catch (e) {
-        errors.push({
-          type: 'invalid_value',
-          property: 'jsonBody',
-          message: 'jsonBody contains invalid JSON',
-          fix: 'Ensure jsonBody contains valid JSON syntax'
-        });
+      // Skip validation for expressions - they will be evaluated at runtime
+      if (!shouldSkipLiteralValidation(config.jsonBody)) {
+        try {
+          JSON.parse(config.jsonBody);
+        } catch (e) {
+          const errorMsg = e instanceof Error ? e.message : 'Unknown parsing error';
+          errors.push({
+            type: 'invalid_value',
+            property: 'jsonBody',
+            message: `jsonBody contains invalid JSON: ${errorMsg}`,
+            fix: 'Fix JSON syntax error and ensure valid JSON format'
+          });
+        }
       }
     }
   }
@@ -435,30 +610,48 @@ export class ConfigValidator {
     config: Record<string, any>,
     properties: any[],
     warnings: ValidationWarning[],
-    suggestions: string[]
+    suggestions: string[],
+    userProvidedKeys?: Set<string> // NEW: Only warn about user-provided properties
   ): void {
     // Skip visibility checks for Code nodes as they have simple property structure
     if (nodeType === 'nodes-base.code') {
       // Code nodes don't have complex displayOptions, so skip visibility warnings
       return;
     }
-    
+
     // Check for properties that won't be used
     const visibleProps = properties.filter(p => this.isPropertyVisible(p, config));
     const configuredKeys = Object.keys(config);
-    
+
     for (const key of configuredKeys) {
       // Skip internal properties that are always present
       if (key === '@version' || key.startsWith('_')) {
         continue;
       }
-      
+
+      // CRITICAL FIX: Only warn about properties the user actually provided, not defaults
+      if (userProvidedKeys && !userProvidedKeys.has(key)) {
+        continue; // Skip properties that were added as defaults
+      }
+
+      // Find the property definition
+      const prop = properties.find(p => p.name === key);
+
+      // Skip UI-only properties (notice, callout, etc.) - they're not configuration
+      if (prop && this.UI_ONLY_TYPES.includes(prop.type)) {
+        continue;
+      }
+
+      // Check if property is visible with current settings
       if (!visibleProps.find(p => p.name === key)) {
+        // Get visibility requirements for better error message
+        const visibilityReq = this.getVisibilityRequirement(prop, config);
+
         warnings.push({
           type: 'inefficient',
           property: key,
-          message: `Property '${key}' is configured but won't be used due to current settings`,
-          suggestion: 'Remove this property or adjust other settings to make it visible'
+          message: `Property '${prop?.displayName || key}' won't be used - not visible with current settings`,
+          suggestion: visibilityReq || 'Remove this property or adjust other settings to make it visible'
         });
       }
     }
@@ -507,6 +700,36 @@ export class ConfigValidator {
     }
   }
   
+  /**
+   * Get visibility requirement for a property
+   * Explains what needs to be set for the property to be visible
+   */
+  private static getVisibilityRequirement(prop: any, config: Record<string, any>): string | undefined {
+    if (!prop || !prop.displayOptions?.show) {
+      return undefined;
+    }
+
+    const requirements: string[] = [];
+    for (const [field, values] of Object.entries(prop.displayOptions.show)) {
+      const expectedValues = Array.isArray(values) ? values : [values];
+      const currentValue = config[field];
+
+      // Only include if the current value doesn't match
+      if (!expectedValues.includes(currentValue)) {
+        const valueStr = expectedValues.length === 1
+          ? `"${expectedValues[0]}"`
+          : expectedValues.map(v => `"${v}"`).join(' or ');
+        requirements.push(`${field}=${valueStr}`);
+      }
+    }
+
+    if (requirements.length === 0) {
+      return undefined;
+    }
+
+    return `Requires: ${requirements.join(', ')}`;
+  }
+
   /**
    * Basic JavaScript syntax validation
    */

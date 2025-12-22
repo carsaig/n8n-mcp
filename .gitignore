@@ -89,6 +89,13 @@ docker-compose.override.yml
 temp/
 tmp/
 
+# Batch processing error files (may contain API tokens from templates)
+docs/batch_*.jsonl
+**/batch_*_error.jsonl
+
+# Local documentation and analysis files
+docs/local/
+
 # Database files
 # Database files - nodes.db is now tracked directly
 # data/*.db
@@ -139,3 +146,6 @@ n8n-mcp-wrapper.sh
 
 # MCP configuration files
 .mcp.json
+
+# Telemetry configuration (user-specific)
+~/.n8n-mcp/
