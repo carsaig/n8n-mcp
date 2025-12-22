@@ -84,55 +84,67 @@ When working with Code nodes, always start by calling the relevant guide:
 
 ## Standard Workflow Pattern
 
+⚠️ **CRITICAL**: Always call get_node() with detail='standard' FIRST before configuring any node!
+
 1. **Find** the node you need:
    - search_nodes({query: "slack"}) - Search by keyword
-   - list_nodes({category: "communication"}) - List by category
-   - list_ai_tools() - List AI-capable nodes
+   - search_nodes({query: "communication"}) - Search by category name
+   - search_nodes({query: "AI langchain"}) - Search for AI-capable nodes
 
-2. **Configure** the node:
-   - get_node_essentials("nodes-base.slack") - Get essential properties only (5KB)
-   - get_node_info("nodes-base.slack") - Get complete schema (100KB+)
-   - search_node_properties("nodes-base.slack", "auth") - Find specific properties
+2. **Configure** the node (ALWAYS START WITH STANDARD DETAIL):
+   - ✅ get_node({nodeType: "nodes-base.slack", detail: "standard"}) - Get essential properties FIRST (~1-2KB, shows required fields)
+   - get_node({nodeType: "nodes-base.slack", detail: "full"}) - Get complete schema only if standard insufficient (~100KB+)
+   - get_node({nodeType: "nodes-base.slack", mode: "docs"}) - Get readable markdown documentation
+   - get_node({nodeType: "nodes-base.slack", mode: "search_properties", propertyQuery: "auth"}) - Find specific properties
 
 3. **Validate** before deployment:
-   - validate_node_minimal("nodes-base.slack", config) - Check required fields
-   - validate_node_operation("nodes-base.slack", config) - Full validation with fixes
-   - validate_workflow(workflow) - Validate entire workflow
+   - validate_node({nodeType: "nodes-base.slack", config: {...}, mode: "minimal"}) - Quick required fields check
+   - validate_node({nodeType: "nodes-base.slack", config: {...}}) - Full validation with errors/warnings/suggestions
+   - validate_workflow({workflow: {...}}) - Validate entire workflow
 
-## Tool Categories
+## Tool Categories (19 Tools Total)
 
-**Discovery Tools**
-- search_nodes - Full-text search across all nodes
-- list_nodes - List nodes with filtering by category, package, or type
-- list_ai_tools - List all AI-capable nodes with usage guidance
+**Discovery Tools** (1 tool)
+- search_nodes - Full-text search across all nodes (supports OR, AND, FUZZY modes)
 
-**Configuration Tools**
-- get_node_essentials - Returns 10-20 key properties with examples
-- get_node_info - Returns complete node schema with all properties
-- search_node_properties - Search for specific properties within a node
-- get_property_dependencies - Analyze property visibility dependencies
+**Configuration Tools** (1 consolidated tool)
+- get_node - Unified node information tool:
+  - detail='minimal'/'standard'/'full': Progressive detail levels
+  - mode='docs': Readable markdown documentation
+  - mode='search_properties': Find specific properties
+  - mode='versions'/'compare'/'breaking'/'migrations': Version management
 
-**Validation Tools**
-- validate_node_minimal - Quick validation of required fields only
-- validate_node_operation - Full validation with operation awareness
-- validate_workflow - Complete workflow validation including connections
+**Validation Tools** (2 tools)
+- validate_node - Unified validation with mode='full' or mode='minimal'
+- validate_workflow - Complete workflow validation (nodes, connections, expressions)
 
-**Template Tools**
-- list_tasks - List common task templates
-- get_node_for_task - Get pre-configured node for specific tasks
-- search_templates - Search workflow templates by keyword
+**Template Tools** (2 tools)
 - get_template - Get complete workflow JSON by ID
+- search_templates - Unified template search:
+  - searchMode='keyword': Text search (default)
+  - searchMode='by_nodes': Find templates using specific nodes
+  - searchMode='by_task': Curated task-based templates
+  - searchMode='by_metadata': Filter by complexity/services
 
-**n8n API Tools** (requires N8N_API_URL configuration)
+**n8n API Tools** (13 tools, requires N8N_API_URL configuration)
 - n8n_create_workflow - Create new workflows
-- n8n_update_partial_workflow - Update workflows using diff operations
-- n8n_validate_workflow - Validate workflow from n8n instance
-- n8n_trigger_webhook_workflow - Trigger workflow execution
+- n8n_get_workflow - Get workflow with mode='full'/'details'/'structure'/'minimal'
+- n8n_update_full_workflow - Full workflow replacement
+- n8n_update_partial_workflow - Incremental diff-based updates
+- n8n_delete_workflow - Delete workflow
+- n8n_list_workflows - List workflows with filters
+- n8n_validate_workflow - Validate workflow by ID
+- n8n_autofix_workflow - Auto-fix common issues
+- n8n_test_workflow - Test/trigger workflows (webhook, form, chat, execute)
+- n8n_executions - Unified execution management (action='get'/'list'/'delete')
+- n8n_health_check - Check n8n API connectivity
+- n8n_workflow_versions - Version history and rollback
+- n8n_deploy_template - Deploy templates directly to n8n instance
 
 ## Performance Characteristics
-- Instant (<10ms): search_nodes, list_nodes, get_node_essentials
-- Fast (<100ms): validate_node_minimal, get_node_for_task
-- Moderate (100-500ms): validate_workflow, get_node_info
+- Instant (<10ms): search_nodes, get_node (minimal/standard)
+- Fast (<100ms): validate_node, get_template
+- Moderate (100-500ms): validate_workflow, get_node (full detail)
 - Network-dependent: All n8n_* tools
 
 For comprehensive documentation on any tool:
@@ -165,7 +177,7 @@ ${tools.map(toolName => {
 
 ## Usage Notes
 - All node types require the "nodes-base." or "nodes-langchain." prefix
-- Use get_node_essentials() first for most tasks (95% smaller than get_node_info)
+- Use get_node() with detail='standard' first for most tasks (~95% smaller than detail='full')
 - Validation profiles: minimal (editing), runtime (default), strict (deployment)
 - n8n API tools only available when N8N_API_URL and N8N_API_KEY are configured
 
@@ -411,8 +423,8 @@ try {
 5. Use descriptive variable names
 
 ## Related Tools
-- get_node_essentials("nodes-base.code")
-- validate_node_operation()
+- get_node({nodeType: "nodes-base.code"}) - Get Code node configuration details
+- validate_node({nodeType: "nodes-base.code", config: {...}}) - Validate Code node setup
 - python_code_node_guide (for Python syntax)`;
 }
 
@@ -680,7 +692,7 @@ except json.JSONDecodeError:
 \`\`\`
 
 ## Related Tools
-- get_node_essentials("nodes-base.code")
-- validate_node_operation()
+- get_node({nodeType: "nodes-base.code"}) - Get Code node configuration details
+- validate_node({nodeType: "nodes-base.code", config: {...}}) - Validate Code node setup
 - javascript_code_node_guide (for JavaScript syntax)`;
 }

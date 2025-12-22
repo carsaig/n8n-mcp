@@ -11,7 +11,7 @@ export const n8nDeleteWorkflowDoc: ToolDocumentation = {
     tips: [
       'Action is irreversible',
       'Deletes all execution history',
-      'Check workflow first with get_minimal'
+      'Check workflow first with n8n_get_workflow({mode: "minimal"})'
     ]
   },
   full: {
@@ -19,7 +19,7 @@ export const n8nDeleteWorkflowDoc: ToolDocumentation = {
     parameters: {
       id: { type: 'string', required: true, description: 'Workflow ID to delete permanently' }
     },
-    returns: 'Success confirmation or error if workflow not found/cannot be deleted',
+    returns: 'Minimal confirmation (id, name, deleted: true) for token efficiency.',
     examples: [
       'n8n_delete_workflow({id: "abc123"}) - Delete specific workflow',
       'if (confirm) { n8n_delete_workflow({id: wf.id}); } // With confirmation'
@@ -34,7 +34,7 @@ export const n8nDeleteWorkflowDoc: ToolDocumentation = {
     performance: 'Fast operation - typically 50-150ms. May take longer if workflow has extensive execution history.',
     bestPractices: [
       'Always confirm before deletion',
-      'Check workflow with get_minimal first',
+      'Check workflow with n8n_get_workflow({mode: "minimal"}) first',
       'Consider deactivating instead of deleting',
       'Export workflow before deletion for backup'
     ],
@@ -45,6 +45,6 @@ export const n8nDeleteWorkflowDoc: ToolDocumentation = {
       'Active workflows can be deleted',
       'No built-in confirmation'
     ],
-    relatedTools: ['n8n_get_workflow_minimal', 'n8n_list_workflows', 'n8n_update_partial_workflow', 'n8n_delete_execution']
+    relatedTools: ['n8n_get_workflow', 'n8n_list_workflows', 'n8n_update_partial_workflow', 'n8n_executions']
   }
 };
