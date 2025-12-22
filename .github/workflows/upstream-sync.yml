@@ -145,16 +145,9 @@ jobs:
           TITLE="chore: sync upstream release ${{ steps.latest.outputs.tag }}"
           BODY=$'This PR merges upstream release `${{ steps.latest.outputs.tag }}` from **${{ env.UPSTREAM_URL }}** into this repo.\n\n- CI must be green (branch protection enforces this).'
 
-          COMPARE_RAW=$(curl -sSL -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${OWNER}/${REPO}/compare/${BASE}...${BRANCH}")
-          COMPARE_BODY=$(echo "${COMPARE_RAW}" | sed '$d')
-          COMPARE_CODE=$(echo "${COMPARE_RAW}" | tail -n 1)
-          if [ "${COMPARE_CODE}" != "200" ]; then
-            echo "Compare API failed with status ${COMPARE_CODE}" >&2
-            echo "${COMPARE_BODY}" >&2
-            exit 1
-          fi
-          AHEAD_BY=$(echo "${COMPARE_BODY}" | jq -r '.ahead_by // 0')
+          git fetch origin "${BASE}"
+          BASE_REF="origin/${BASE}"
+          AHEAD_BY=$(git rev-list --count "${BASE_REF}..${BRANCH}")
           if [ "${AHEAD_BY}" -eq 0 ]; then
             echo "No commits between ${BASE} and ${BRANCH}; skipping PR creation."
             echo "pull-request-number=" >> "$GITHUB_OUTPUT"
