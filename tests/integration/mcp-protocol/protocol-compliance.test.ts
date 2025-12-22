@@ -74,7 +74,7 @@ describe('MCP Protocol Compliance', () => {
       for (let i = 0; i < 5; i++) {
         expectedOrder.push(i);
         requests.push(
-          client.callTool({ name: 'get_database_statistics', arguments: {} })
+          client.callTool({ name: 'tools_documentation', arguments: {} })
             .then(() => i)
         );
       }
@@ -125,14 +125,14 @@ describe('MCP Protocol Compliance', () => {
 
     it('should handle missing params gracefully', async () => {
       // Most tools should work without params
-      const response = await client.callTool({ name: 'list_nodes', arguments: {} });
+      const response = await client.callTool({ name: 'search_nodes', arguments: { query: 'webhook' } });
       expect(response).toBeDefined();
     });
 
     it('should validate params schema', async () => {
       try {
         // Invalid nodeType format (missing prefix)
-        const response = await client.callTool({ name: 'get_node_info', arguments: {
+        const response = await client.callTool({ name: 'get_node', arguments: {
           nodeType: 'httpRequest' // Should be 'nodes-base.httpRequest'
         } });
         // Check if the response indicates an error
@@ -147,8 +147,8 @@ describe('MCP Protocol Compliance', () => {
 
   describe('Content Types', () => {
     it('should handle text content in tool responses', async () => {
-      const response = await client.callTool({ name: 'get_database_statistics', arguments: {} });
-      
+      const response = await client.callTool({ name: 'tools_documentation', arguments: {} });
+
       expect((response as any).content).toHaveLength(1);
       expect((response as any).content[0]).toHaveProperty('type', 'text');
       expect((response as any).content[0]).toHaveProperty('text');
@@ -157,7 +157,7 @@ describe('MCP Protocol Compliance', () => {
 
     it('should handle large text responses', async () => {
       // Get a large node info response
-      const response = await client.callTool({ name: 'get_node_info', arguments: {
+      const response = await client.callTool({ name: 'get_node', arguments: {
         nodeType: 'nodes-base.httpRequest'
       } });
 
@@ -167,23 +167,24 @@ describe('MCP Protocol Compliance', () => {
     });
 
     it('should handle JSON content properly', async () => {
-      const response = await client.callTool({ name: 'list_nodes', arguments: {
+      const response = await client.callTool({ name: 'search_nodes', arguments: {
+        query: 'webhook',
         limit: 5
       } });
 
       expect((response as any).content).toHaveLength(1);
       const content = JSON.parse((response as any).content[0].text);
-      expect(content).toHaveProperty('nodes');
-      expect(Array.isArray(content.nodes)).toBe(true);
+      expect(content).toHaveProperty('results');
+      expect(Array.isArray(content.results)).toBe(true);
     });
   });
 
   describe('Request/Response Correlation', () => {
     it('should correlate concurrent requests correctly', async () => {
       const requests = [
-        client.callTool({ name: 'get_node_essentials', arguments: { nodeType: 'nodes-base.httpRequest' } }),
-        client.callTool({ name: 'get_node_essentials', arguments: { nodeType: 'nodes-base.webhook' } }),
-        client.callTool({ name: 'get_node_essentials', arguments: { nodeType: 'nodes-base.slack' } })
+        client.callTool({ name: 'get_node', arguments: { nodeType: 'nodes-base.httpRequest' } }),
+        client.callTool({ name: 'get_node', arguments: { nodeType: 'nodes-base.webhook' } }),
+        client.callTool({ name: 'get_node', arguments: { nodeType: 'nodes-base.slack' } })
       ];
 
       const responses = await Promise.all(requests);
@@ -197,10 +198,10 @@ describe('MCP Protocol Compliance', () => {
       const results: string[] = [];
 
       // Start multiple requests with different delays
-      const p1 = client.callTool({ name: 'get_database_statistics', arguments: {} })
-        .then(() => { results.push('stats'); return 'stats'; });
+      const p1 = client.callTool({ name: 'tools_documentation', arguments: {} })
+        .then(() => { results.push('docs'); return 'docs'; });
 
-      const p2 = client.callTool({ name: 'list_nodes', arguments: { limit: 1 } })
+      const p2 = client.callTool({ name: 'search_nodes', arguments: { query: 'webhook', limit: 1 } })
         .then(() => { results.push('nodes'); return 'nodes'; });
 
       const p3 = client.callTool({ name: 'search_nodes', arguments: { query: 'http' } })
@@ -216,13 +217,14 @@ describe('MCP Protocol Compliance', () => {
 
   describe('Protocol Extensions', () => {
     it('should handle tool-specific extensions', async () => {
-      // Test tool with complex params
-      const response = await client.callTool({ name: 'validate_node_operation', arguments: {
+      // Test tool with complex params (using consolidated validate_node from v2.26.0)
+      const response = await client.callTool({ name: 'validate_node', arguments: {
         nodeType: 'nodes-base.httpRequest',
         config: {
           method: 'GET',
           url: 'https://api.example.com'
         },
+        mode: 'full',
         profile: 'runtime'
       } });
 
@@ -232,13 +234,13 @@ describe('MCP Protocol Compliance', () => {
 
     it('should support optional parameters', async () => {
       // Call with minimal params
-      const response1 = await client.callTool({ name: 'list_nodes', arguments: {} });
-      
+      const response1 = await client.callTool({ name: 'search_nodes', arguments: { query: 'webhook' } });
+
       // Call with all params
-      const response2 = await client.callTool({ name: 'list_nodes', arguments: {
+      const response2 = await client.callTool({ name: 'search_nodes', arguments: {
+        query: 'webhook',
         limit: 10,
-        category: 'trigger',
-        package: 'n8n-nodes-base'
+        mode: 'OR'
       } });
 
       expect(response1).toBeDefined();
@@ -255,7 +257,7 @@ describe('MCP Protocol Compliance', () => {
       await testClient.connect(clientTransport);
 
       // Make a request
-      const response = await testClient.callTool({ name: 'get_database_statistics', arguments: {} });
+      const response = await testClient.callTool({ name: 'tools_documentation', arguments: {} });
       expect(response).toBeDefined();
 
       // Close client
@@ -263,7 +265,7 @@ describe('MCP Protocol Compliance', () => {
 
       // Further requests should fail
       try {
-        await testClient.callTool({ name: 'get_database_statistics', arguments: {} });
+        await testClient.callTool({ name: 'tools_documentation', arguments: {} });
         expect.fail('Should have thrown an error');
       } catch (error) {
         expect(error).toBeDefined();
@@ -286,7 +288,7 @@ describe('MCP Protocol Compliance', () => {
         const testClient = new Client({ name: 'test', version: '1.0.0' }, {});
         await testClient.connect(clientTransport);
 
-        const response = await testClient.callTool({ name: 'get_database_statistics', arguments: {} });
+        const response = await testClient.callTool({ name: 'tools_documentation', arguments: {} });
         expect(response).toBeDefined();
 
         await testClient.close();

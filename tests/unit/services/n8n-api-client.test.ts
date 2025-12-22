@@ -12,6 +12,12 @@ import {
 } from '../../../src/utils/n8n-errors';
 import * as n8nValidation from '../../../src/services/n8n-validation';
 import { logger } from '../../../src/utils/logger';
+import * as dns from 'dns/promises';
+
+// Mock DNS module for SSRF protection
+vi.mock('dns/promises', () => ({
+  lookup: vi.fn(),
+}));
 
 // Mock dependencies
 vi.mock('axios');
@@ -52,7 +58,22 @@ describe('N8nApiClient', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    
+
+    // Mock DNS lookup for SSRF protection
+    vi.mocked(dns.lookup).mockImplementation(async (hostname: any) => {
+      // Simulate real DNS behavior for test URLs
+      if (hostname === 'localhost') {
+        return { address: '127.0.0.1', family: 4 } as any;
+      }
+      // For hostnames that look like IPs, return as-is
+      const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+      if (ipv4Regex.test(hostname)) {
+        return { address: hostname, family: 4 } as any;
+      }
+      // For real hostnames (like n8n.example.com), return a public IP
+      return { address: '8.8.8.8', family: 4 } as any;
+    });
+
     // Create mock axios instance
     mockAxiosInstance = {
       defaults: { baseURL: 'https://n8n.example.com/api/v1' },
@@ -341,19 +362,19 @@ describe('N8nApiClient', () => {
 
     it('should delete workflow successfully', async () => {
       mockAxiosInstance.delete.mockResolvedValue({ data: {} });
-      
+
       await client.deleteWorkflow('123');
-      
+
       expect(mockAxiosInstance.delete).toHaveBeenCalledWith('/workflows/123');
     });
 
     it('should handle deletion error', async () => {
-      const error = { 
+      const error = {
         message: 'Request failed',
-        response: { status: 404, data: { message: 'Not found' } } 
+        response: { status: 404, data: { message: 'Not found' } }
       };
       await mockAxiosInstance.simulateError('delete', error);
-      
+
       try {
         await client.deleteWorkflow('123');
         expect.fail('Should have thrown an error');
@@ -361,6 +382,178 @@ describe('N8nApiClient', () => {
         expect(err).toBeInstanceOf(N8nNotFoundError);
         expect((err as N8nNotFoundError).message).toContain('not found');
         expect((err as N8nNotFoundError).statusCode).toBe(404);
+      }
+    });
+  });
+
+  describe('activateWorkflow', () => {
+    beforeEach(() => {
+      client = new N8nApiClient(defaultConfig);
+    });
+
+    it('should activate workflow successfully', async () => {
+      const workflow = { id: '123', name: 'Test', active: false, nodes: [], connections: {} };
+      const activatedWorkflow = { ...workflow, active: true };
+      mockAxiosInstance.post.mockResolvedValue({ data: activatedWorkflow });
+
+      const result = await client.activateWorkflow('123');
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/workflows/123/activate');
+      expect(result).toEqual(activatedWorkflow);
+      expect(result.active).toBe(true);
+    });
+
+    it('should handle activation error - no trigger nodes', async () => {
+      const error = {
+        message: 'Request failed',
+        response: { status: 400, data: { message: 'Workflow must have at least one trigger node' } }
+      };
+      await mockAxiosInstance.simulateError('post', error);
+
+      try {
+        await client.activateWorkflow('123');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).toBeInstanceOf(N8nValidationError);
+        expect((err as N8nValidationError).message).toContain('trigger node');
+        expect((err as N8nValidationError).statusCode).toBe(400);
+      }
+    });
+
+    it('should handle activation error - workflow not found', async () => {
+      const error = {
+        message: 'Request failed',
+        response: { status: 404, data: { message: 'Workflow not found' } }
+      };
+      await mockAxiosInstance.simulateError('post', error);
+
+      try {
+        await client.activateWorkflow('non-existent');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).toBeInstanceOf(N8nNotFoundError);
+        expect((err as N8nNotFoundError).message).toContain('not found');
+        expect((err as N8nNotFoundError).statusCode).toBe(404);
+      }
+    });
+
+    it('should handle activation error - workflow already active', async () => {
+      const error = {
+        message: 'Request failed',
+        response: { status: 400, data: { message: 'Workflow is already active' } }
+      };
+      await mockAxiosInstance.simulateError('post', error);
+
+      try {
+        await client.activateWorkflow('123');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).toBeInstanceOf(N8nValidationError);
+        expect((err as N8nValidationError).message).toContain('already active');
+        expect((err as N8nValidationError).statusCode).toBe(400);
+      }
+    });
+
+    it('should handle server error during activation', async () => {
+      const error = {
+        message: 'Request failed',
+        response: { status: 500, data: { message: 'Internal server error' } }
+      };
+      await mockAxiosInstance.simulateError('post', error);
+
+      try {
+        await client.activateWorkflow('123');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).toBeInstanceOf(N8nServerError);
+        expect((err as N8nServerError).message).toBe('Internal server error');
+        expect((err as N8nServerError).statusCode).toBe(500);
+      }
+    });
+  });
+
+  describe('deactivateWorkflow', () => {
+    beforeEach(() => {
+      client = new N8nApiClient(defaultConfig);
+    });
+
+    it('should deactivate workflow successfully', async () => {
+      const workflow = { id: '123', name: 'Test', active: true, nodes: [], connections: {} };
+      const deactivatedWorkflow = { ...workflow, active: false };
+      mockAxiosInstance.post.mockResolvedValue({ data: deactivatedWorkflow });
+
+      const result = await client.deactivateWorkflow('123');
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/workflows/123/deactivate');
+      expect(result).toEqual(deactivatedWorkflow);
+      expect(result.active).toBe(false);
+    });
+
+    it('should handle deactivation error - workflow not found', async () => {
+      const error = {
+        message: 'Request failed',
+        response: { status: 404, data: { message: 'Workflow not found' } }
+      };
+      await mockAxiosInstance.simulateError('post', error);
+
+      try {
+        await client.deactivateWorkflow('non-existent');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).toBeInstanceOf(N8nNotFoundError);
+        expect((err as N8nNotFoundError).message).toContain('not found');
+        expect((err as N8nNotFoundError).statusCode).toBe(404);
+      }
+    });
+
+    it('should handle deactivation error - workflow already inactive', async () => {
+      const error = {
+        message: 'Request failed',
+        response: { status: 400, data: { message: 'Workflow is already inactive' } }
+      };
+      await mockAxiosInstance.simulateError('post', error);
+
+      try {
+        await client.deactivateWorkflow('123');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).toBeInstanceOf(N8nValidationError);
+        expect((err as N8nValidationError).message).toContain('already inactive');
+        expect((err as N8nValidationError).statusCode).toBe(400);
+      }
+    });
+
+    it('should handle server error during deactivation', async () => {
+      const error = {
+        message: 'Request failed',
+        response: { status: 500, data: { message: 'Internal server error' } }
+      };
+      await mockAxiosInstance.simulateError('post', error);
+
+      try {
+        await client.deactivateWorkflow('123');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).toBeInstanceOf(N8nServerError);
+        expect((err as N8nServerError).message).toBe('Internal server error');
+        expect((err as N8nServerError).statusCode).toBe(500);
+      }
+    });
+
+    it('should handle authentication error during deactivation', async () => {
+      const error = {
+        message: 'Request failed',
+        response: { status: 401, data: { message: 'Invalid API key' } }
+      };
+      await mockAxiosInstance.simulateError('post', error);
+
+      try {
+        await client.deactivateWorkflow('123');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).toBeInstanceOf(N8nAuthenticationError);
+        expect((err as N8nAuthenticationError).message).toBe('Invalid API key');
+        expect((err as N8nAuthenticationError).statusCode).toBe(401);
       }
     });
   });
@@ -381,14 +574,250 @@ describe('N8nApiClient', () => {
     });
 
     it('should list workflows with custom params', async () => {
-      const params = { limit: 10, active: true, tags: ['test'] };
+      const params = { limit: 10, active: true, tags: 'test,production' };
       const response = { data: [], nextCursor: null };
       mockAxiosInstance.get.mockResolvedValue({ data: response });
-      
+
       const result = await client.listWorkflows(params);
-      
+
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/workflows', { params });
       expect(result).toEqual(response);
+    });
+  });
+
+  describe('Response Format Validation (PR #367)', () => {
+    beforeEach(() => {
+      client = new N8nApiClient(defaultConfig);
+    });
+
+    describe('listWorkflows - validation', () => {
+      it('should handle modern format with data and nextCursor', async () => {
+        const response = { data: [{ id: '1', name: 'Test' }], nextCursor: 'abc123' };
+        mockAxiosInstance.get.mockResolvedValue({ data: response });
+
+        const result = await client.listWorkflows();
+
+        expect(result).toEqual(response);
+        expect(result.data).toHaveLength(1);
+        expect(result.nextCursor).toBe('abc123');
+      });
+
+      it('should wrap legacy array format and log warning', async () => {
+        const workflows = [{ id: '1', name: 'Test' }];
+        mockAxiosInstance.get.mockResolvedValue({ data: workflows });
+
+        const result = await client.listWorkflows();
+
+        expect(result).toEqual({ data: workflows, nextCursor: null });
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('n8n API returned array directly')
+        );
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('workflows')
+        );
+      });
+
+      it('should throw error on null response', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: null });
+
+        await expect(client.listWorkflows()).rejects.toThrow(
+          'Invalid response from n8n API for workflows: response is not an object'
+        );
+      });
+
+      it('should throw error on undefined response', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: undefined });
+
+        await expect(client.listWorkflows()).rejects.toThrow(
+          'Invalid response from n8n API for workflows: response is not an object'
+        );
+      });
+
+      it('should throw error on string response', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: 'invalid' });
+
+        await expect(client.listWorkflows()).rejects.toThrow(
+          'Invalid response from n8n API for workflows: response is not an object'
+        );
+      });
+
+      it('should throw error on number response', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: 42 });
+
+        await expect(client.listWorkflows()).rejects.toThrow(
+          'Invalid response from n8n API for workflows: response is not an object'
+        );
+      });
+
+      it('should throw error on invalid structure with different keys', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: { items: [], total: 10 } });
+
+        await expect(client.listWorkflows()).rejects.toThrow(
+          'Invalid response from n8n API for workflows: expected {data: [], nextCursor?: string}, got object with keys: [items, total]'
+        );
+      });
+
+      it('should throw error when data is not an array', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: { data: 'invalid' } });
+
+        await expect(client.listWorkflows()).rejects.toThrow(
+          'Invalid response from n8n API for workflows: expected {data: [], nextCursor?: string}'
+        );
+      });
+
+      it('should limit exposed keys to first 5 when many keys present', async () => {
+        const manyKeys = { items: [], total: 10, page: 1, limit: 20, hasMore: true, metadata: {} };
+        mockAxiosInstance.get.mockResolvedValue({ data: manyKeys });
+
+        try {
+          await client.listWorkflows();
+          expect.fail('Should have thrown error');
+        } catch (error: any) {
+          expect(error.message).toContain('items, total, page, limit, hasMore...');
+          expect(error.message).not.toContain('metadata');
+        }
+      });
+    });
+
+    describe('listExecutions - validation', () => {
+      it('should handle modern format with data and nextCursor', async () => {
+        const response = { data: [{ id: '1' }], nextCursor: 'abc123' };
+        mockAxiosInstance.get.mockResolvedValue({ data: response });
+
+        const result = await client.listExecutions();
+
+        expect(result).toEqual(response);
+      });
+
+      it('should wrap legacy array format and log warning', async () => {
+        const executions = [{ id: '1' }];
+        mockAxiosInstance.get.mockResolvedValue({ data: executions });
+
+        const result = await client.listExecutions();
+
+        expect(result).toEqual({ data: executions, nextCursor: null });
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('executions')
+        );
+      });
+
+      it('should throw error on null response', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: null });
+
+        await expect(client.listExecutions()).rejects.toThrow(
+          'Invalid response from n8n API for executions: response is not an object'
+        );
+      });
+
+      it('should throw error on invalid structure', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: { items: [] } });
+
+        await expect(client.listExecutions()).rejects.toThrow(
+          'Invalid response from n8n API for executions'
+        );
+      });
+
+      it('should throw error when data is not an array', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: { data: 'invalid' } });
+
+        await expect(client.listExecutions()).rejects.toThrow(
+          'Invalid response from n8n API for executions'
+        );
+      });
+    });
+
+    describe('listCredentials - validation', () => {
+      it('should handle modern format with data and nextCursor', async () => {
+        const response = { data: [{ id: '1' }], nextCursor: 'abc123' };
+        mockAxiosInstance.get.mockResolvedValue({ data: response });
+
+        const result = await client.listCredentials();
+
+        expect(result).toEqual(response);
+      });
+
+      it('should wrap legacy array format and log warning', async () => {
+        const credentials = [{ id: '1' }];
+        mockAxiosInstance.get.mockResolvedValue({ data: credentials });
+
+        const result = await client.listCredentials();
+
+        expect(result).toEqual({ data: credentials, nextCursor: null });
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('credentials')
+        );
+      });
+
+      it('should throw error on null response', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: null });
+
+        await expect(client.listCredentials()).rejects.toThrow(
+          'Invalid response from n8n API for credentials: response is not an object'
+        );
+      });
+
+      it('should throw error on invalid structure', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: { items: [] } });
+
+        await expect(client.listCredentials()).rejects.toThrow(
+          'Invalid response from n8n API for credentials'
+        );
+      });
+
+      it('should throw error when data is not an array', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: { data: 'invalid' } });
+
+        await expect(client.listCredentials()).rejects.toThrow(
+          'Invalid response from n8n API for credentials'
+        );
+      });
+    });
+
+    describe('listTags - validation', () => {
+      it('should handle modern format with data and nextCursor', async () => {
+        const response = { data: [{ id: '1' }], nextCursor: 'abc123' };
+        mockAxiosInstance.get.mockResolvedValue({ data: response });
+
+        const result = await client.listTags();
+
+        expect(result).toEqual(response);
+      });
+
+      it('should wrap legacy array format and log warning', async () => {
+        const tags = [{ id: '1' }];
+        mockAxiosInstance.get.mockResolvedValue({ data: tags });
+
+        const result = await client.listTags();
+
+        expect(result).toEqual({ data: tags, nextCursor: null });
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('tags')
+        );
+      });
+
+      it('should throw error on null response', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: null });
+
+        await expect(client.listTags()).rejects.toThrow(
+          'Invalid response from n8n API for tags: response is not an object'
+        );
+      });
+
+      it('should throw error on invalid structure', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: { items: [] } });
+
+        await expect(client.listTags()).rejects.toThrow(
+          'Invalid response from n8n API for tags'
+        );
+      });
+
+      it('should throw error when data is not an array', async () => {
+        mockAxiosInstance.get.mockResolvedValue({ data: { data: 'invalid' } });
+
+        await expect(client.listTags()).rejects.toThrow(
+          'Invalid response from n8n API for tags'
+        );
+      });
     });
   });
 

@@ -105,6 +105,9 @@ These are automatically set by the Railway template:
 | `CORS_ORIGIN` | `*` | Allow any origin |
 | `HOST` | `0.0.0.0` | Listen on all interfaces |
 | `PORT` | (Railway provides) | Don't set manually |
+| `AUTH_RATE_LIMIT_WINDOW` | `900000` (15 min) | Rate limit window (v2.16.3+) |
+| `AUTH_RATE_LIMIT_MAX` | `20` | Max auth attempts (v2.16.3+) |
+| `WEBHOOK_SECURITY_MODE` | `strict` | SSRF protection mode (v2.16.3+) |
 
 ### Optional Variables
 
@@ -180,6 +183,46 @@ Claude Desktop → mcp-remote → Railway (HTTPS) → n8n-MCP Server
 - Ensure the URL is correct and includes `https://`
 - Check Railway logs for any errors
 
+**Windows: "The filename, directory name, or volume label syntax is incorrect" or npx command not found:**
+
+This is a common Windows issue with spaces in Node.js installation paths. The error occurs because Claude Desktop can't properly execute npx.
+
+**Solution 1: Use node directly (Recommended)**
+```json
+{
+  "mcpServers": {
+    "n8n-railway": {
+      "command": "node",
+      "args": [
+        "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js",
+        "-y",
+        "mcp-remote",
+        "https://your-app-name.up.railway.app/mcp",
+        "--header",
+        "Authorization: Bearer YOUR_SECURE_TOKEN_HERE"
+      ]
+    }
+  }
+}
+```
+
+**Solution 2: Use cmd wrapper**
+```json
+{
+  "mcpServers": {
+    "n8n-railway": {
+      "command": "cmd",
+      "args": [
+        "/C",
+        "\"C:\\Program Files\\nodejs\\npx\" -y mcp-remote https://your-app-name.up.railway.app/mcp --header \"Authorization: Bearer YOUR_SECURE_TOKEN_HERE\""
+      ]
+    }
+  }
+}
+```
+
+To find your exact npx path, open Command Prompt and run: `where npx`
+
 ### Railway-Specific Issues
 
 **Build failures:**
@@ -243,6 +286,32 @@ Since the Railway template uses a specific Docker image tag, updates are manual:
 ### Automatic Updates (Not Recommended)
 
 You could use the `latest` tag, but this may cause unexpected breaking changes.
+
+## 🔒 Security Features (v2.16.3+)
+
+Railway deployments include enhanced security features:
+
+### Rate Limiting
+- **Automatic brute force protection** - 20 attempts per 15 minutes per IP
+- **Configurable limits** via `AUTH_RATE_LIMIT_WINDOW` and `AUTH_RATE_LIMIT_MAX`
+- **Standard rate limit headers** for client awareness
+
+### SSRF Protection
+- **Default strict mode** blocks localhost, private IPs, and cloud metadata
+- **Cloud metadata always blocked** (169.254.169.254, metadata.google.internal, etc.)
+- **Use `moderate` mode only if** connecting to local n8n instance
+
+**Security Configuration:**
+```bash
+# In Railway Variables tab:
+WEBHOOK_SECURITY_MODE=strict          # Production (recommended)
+# or
+WEBHOOK_SECURITY_MODE=moderate        # If using local n8n with port forwarding
+
+# Rate limiting (defaults are good for most use cases)
+AUTH_RATE_LIMIT_WINDOW=900000         # 15 minutes
+AUTH_RATE_LIMIT_MAX=20                # 20 attempts per IP
+```
 
 ## 📝 Best Practices
 

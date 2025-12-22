@@ -116,17 +116,46 @@ The `n8n_update_partial_workflow` tool allows you to make targeted changes to wo
 }
 ```
 
-#### Update Connection (Change routing)
+#### Rewire Connection
 ```json
 {
-  "type": "updateConnection",
+  "type": "rewireConnection",
+  "source": "Webhook",
+  "from": "Old Handler",
+  "to": "New Handler",
+  "description": "Rewire connection to new handler"
+}
+```
+
+#### Smart Parameters for IF Nodes
+```json
+{
+  "type": "addConnection",
   "source": "IF",
-  "target": "Send Email",
-  "changes": {
-    "sourceOutput": "false",  // Change from 'true' to 'false' output
-    "targetInput": "main"
-  },
-  "description": "Route failed conditions to email"
+  "target": "Success Handler",
+  "branch": "true",  // Semantic parameter instead of sourceIndex
+  "description": "Route true branch to success handler"
+}
+```
+
+```json
+{
+  "type": "addConnection",
+  "source": "IF",
+  "target": "Error Handler",
+  "branch": "false",  // Routes to false branch (sourceIndex=1)
+  "description": "Route false branch to error handler"
+}
+```
+
+#### Smart Parameters for Switch Nodes
+```json
+{
+  "type": "addConnection",
+  "source": "Switch",
+  "target": "Handler A",
+  "case": 0,  // First output
+  "description": "Route case 0 to Handler A"
 }
 ```
 
@@ -296,6 +325,193 @@ The `n8n_update_partial_workflow` tool allows you to make targeted changes to wo
 }
 ```
 
+### Example 5: Large Batch Workflow Refactoring
+Demonstrates handling many operations in a single request - no longer limited to 5 operations!
+
+```json
+{
+  "id": "workflow-batch",
+  "operations": [
+    // Add 10 processing nodes
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Filter Active Users",
+        "type": "n8n-nodes-base.filter",
+        "position": [400, 200],
+        "parameters": { "conditions": { "boolean": [{ "value1": "={{$json.active}}", "value2": true }] } }
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Transform User Data",
+        "type": "n8n-nodes-base.set",
+        "position": [600, 200],
+        "parameters": { "values": { "string": [{ "name": "formatted_name", "value": "={{$json.firstName}} {{$json.lastName}}" }] } }
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Validate Email",
+        "type": "n8n-nodes-base.if",
+        "position": [800, 200],
+        "parameters": { "conditions": { "string": [{ "value1": "={{$json.email}}", "operation": "contains", "value2": "@" }] } }
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Enrich with API",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [1000, 150],
+        "parameters": { "url": "https://api.example.com/enrich", "method": "POST" }
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Log Invalid Emails",
+        "type": "n8n-nodes-base.code",
+        "position": [1000, 350],
+        "parameters": { "jsCode": "console.log('Invalid email:', $json.email);\nreturn $json;" }
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Merge Results",
+        "type": "n8n-nodes-base.merge",
+        "position": [1200, 250]
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Deduplicate",
+        "type": "n8n-nodes-base.removeDuplicates",
+        "position": [1400, 250],
+        "parameters": { "propertyName": "id" }
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Sort by Date",
+        "type": "n8n-nodes-base.sort",
+        "position": [1600, 250],
+        "parameters": { "sortFieldsUi": { "sortField": [{ "fieldName": "created_at", "order": "descending" }] } }
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Batch for DB",
+        "type": "n8n-nodes-base.splitInBatches",
+        "position": [1800, 250],
+        "parameters": { "batchSize": 100 }
+      }
+    },
+    {
+      "type": "addNode",
+      "node": {
+        "name": "Save to Database",
+        "type": "n8n-nodes-base.postgres",
+        "position": [2000, 250],
+        "parameters": { "operation": "insert", "table": "processed_users" }
+      }
+    },
+    // Connect all the nodes
+    {
+      "type": "addConnection",
+      "source": "Get Users",
+      "target": "Filter Active Users"
+    },
+    {
+      "type": "addConnection",
+      "source": "Filter Active Users",
+      "target": "Transform User Data"
+    },
+    {
+      "type": "addConnection",
+      "source": "Transform User Data",
+      "target": "Validate Email"
+    },
+    {
+      "type": "addConnection",
+      "source": "Validate Email",
+      "sourceOutput": "true",
+      "target": "Enrich with API"
+    },
+    {
+      "type": "addConnection",
+      "source": "Validate Email",
+      "sourceOutput": "false",
+      "target": "Log Invalid Emails"
+    },
+    {
+      "type": "addConnection",
+      "source": "Enrich with API",
+      "target": "Merge Results"
+    },
+    {
+      "type": "addConnection",
+      "source": "Log Invalid Emails",
+      "target": "Merge Results",
+      "targetInput": "input2"
+    },
+    {
+      "type": "addConnection",
+      "source": "Merge Results",
+      "target": "Deduplicate"
+    },
+    {
+      "type": "addConnection",
+      "source": "Deduplicate",
+      "target": "Sort by Date"
+    },
+    {
+      "type": "addConnection",
+      "source": "Sort by Date",
+      "target": "Batch for DB"
+    },
+    {
+      "type": "addConnection",
+      "source": "Batch for DB",
+      "target": "Save to Database"
+    },
+    // Update workflow metadata
+    {
+      "type": "updateName",
+      "name": "User Processing Pipeline v2"
+    },
+    {
+      "type": "updateSettings",
+      "settings": {
+        "executionOrder": "v1",
+        "timezone": "UTC",
+        "saveDataSuccessExecution": "all"
+      }
+    },
+    {
+      "type": "addTag",
+      "tag": "production"
+    },
+    {
+      "type": "addTag",
+      "tag": "user-processing"
+    },
+    {
+      "type": "addTag",
+      "tag": "v2"
+    }
+  ]
+}
+```
+
+This example shows 26 operations in a single request, creating a complete data processing pipeline with proper error handling, validation, and batch processing.
+
 ## Best Practices
 
 1. **Use Descriptive Names**: Always provide clear node names and descriptions for operations
@@ -390,13 +606,13 @@ The tool validates all operations before applying any changes. Common errors inc
 
 Always check the response for validation errors and adjust your operations accordingly.
 
-## Transactional Updates (v2.7.0+)
+## Transactional Updates
 
 The diff engine now supports transactional updates using a **two-pass processing** approach:
 
 ### How It Works
 
-1. **Operation Limit**: Maximum 5 operations per request to ensure reliability
+1. **No Operation Limit**: Process unlimited operations in a single request
 2. **Two-Pass Processing**:
    - **Pass 1**: All node operations (add, remove, update, move, enable, disable)
    - **Pass 2**: All other operations (connections, settings, metadata)
@@ -446,9 +662,9 @@ This allows you to add nodes and connect them in the same request:
 ### Benefits
 
 - **Order Independence**: You don't need to worry about operation order
-- **Atomic Updates**: All operations succeed or all fail
+- **Atomic Updates**: All operations succeed or all fail (unless continueOnError is enabled)
 - **Intuitive Usage**: Add complex workflow structures in one call
-- **Clear Limits**: 5 operations max keeps things simple and reliable
+- **No Hard Limits**: Process unlimited operations efficiently
 
 ### Example: Complete Workflow Addition
 
@@ -507,4 +723,4 @@ This allows you to add nodes and connect them in the same request:
 }
 ```
 
-All 5 operations will be processed correctly regardless of order!
+All operations will be processed correctly regardless of order!
