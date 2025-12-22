@@ -138,27 +138,43 @@ jobs:
             echo "No token available to create PR. Set GHCR_PAT with repo scope." >&2
             exit 1
           fi
-          export GH_TOKEN="${TOKEN}"
           BRANCH="${{ steps.prep.outputs.branch }}"
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+          BASE="${{ github.event.repository.default_branch }}"
           TITLE="chore: sync upstream release ${{ steps.latest.outputs.tag }}"
           BODY=$'This PR merges upstream release `${{ steps.latest.outputs.tag }}` from **${{ env.UPSTREAM_URL }}** into this repo.\n\n- CI must be green (branch protection enforces this).'
 
-          if gh pr view --head "${BRANCH}" --json number >/dev/null 2>&1; then
-            echo "PR already exists for ${BRANCH}"
-          else
-            gh pr create \
-              --base "${{ github.event.repository.default_branch }}" \
-              --head "${BRANCH}" \
-              --title "${TITLE}" \
-              --body "${BODY}"
+          COMPARE=$(curl -sSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/compare/${BASE}...${BRANCH}")
+          AHEAD_BY=$(echo "${COMPARE}" | jq -r '.ahead_by // 0')
+          if [ "${AHEAD_BY}" -eq 0 ]; then
+            echo "No commits between ${BASE} and ${BRANCH}; skipping PR creation."
+            echo "pull-request-number=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          PR_NUMBER=$(gh pr view --head "${BRANCH}" --json number -q .number)
+          EXISTING=$(curl -sSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/pulls?head=${OWNER}:${BRANCH}&state=open" | jq -r '.[0].number // empty')
+          if [ -n "${EXISTING}" ]; then
+            PR_NUMBER="${EXISTING}"
+          else
+            PR_NUMBER=$(curl -sSL -X POST -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${OWNER}/${REPO}/pulls" \
+              -d "{\"title\":\"${TITLE}\",\"head\":\"${BRANCH}\",\"base\":\"${BASE}\",\"body\":\"${BODY}\"}" | jq -r '.number // empty')
+          fi
+
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "Failed to create or locate PR for ${BRANCH}" >&2
+            exit 1
+          fi
+
           echo "pull-request-number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
 
           # Add labels if they exist; don't fail the workflow if they don't.
-          gh pr edit "${PR_NUMBER}" --add-label "dependencies" || true
-          gh pr edit "${PR_NUMBER}" --add-label "upstream-sync" || true
+          curl -sSL -X POST -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/labels" \
+            -d '{"labels":["dependencies","upstream-sync"]}' >/dev/null || true
 
       - name: Enable PR auto-merge (squash) once checks pass
         if: steps.diffcheck.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number && steps.cpr.outputs.pull-request-number != ''
