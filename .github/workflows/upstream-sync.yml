@@ -129,9 +129,16 @@ jobs:
         id: cpr
         if: steps.diffcheck.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PAT: ${{ secrets.GHCR_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          TOKEN="${GH_PAT:-$GITHUB_TOKEN}"
+          if [ -z "${TOKEN}" ]; then
+            echo "No token available to create PR. Set GHCR_PAT with repo scope." >&2
+            exit 1
+          fi
+          export GH_TOKEN="${TOKEN}"
           BRANCH="${{ steps.prep.outputs.branch }}"
           TITLE="chore: sync upstream release ${{ steps.latest.outputs.tag }}"
           BODY=$'This PR merges upstream release `${{ steps.latest.outputs.tag }}` from **${{ env.UPSTREAM_URL }}** into this repo.\n\n- CI must be green (branch protection enforces this).'
