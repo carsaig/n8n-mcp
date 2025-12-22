@@ -84,9 +84,9 @@ jobs:
           if ! git merge --no-ff --no-edit "${OID}"; then
             echo "Merge conflict while preparing ${BRANCH}. Applying fork-vs-upstream resolution policy..." >&2
             # Keep fork-specific workflows and deployment setup
-            git checkout --ours -- .github/workflows Dockerfile src/http-server.ts AGENTS.md CLAUDE.md || true
+            git checkout --ours -- .github/workflows Dockerfile src/http-server.ts src/http-server-single-session.ts src/mcp/index.ts src/mcp/server.ts src/mcp/handlers-n8n-manager.ts src/mcp/handlers-workflow-diff.ts AGENTS.md CLAUDE.md || true
             # Take upstream for the rest of the known conflict set
-            git checkout --theirs -- MEMORY_N8N_UPDATE.md README.md docs/CHANGELOG.md package-lock.json package.json src/mcp/server.ts || true
+            git checkout --theirs -- MEMORY_N8N_UPDATE.md README.md docs/CHANGELOG.md package-lock.json package.json || true
             git add -A
             if ! git diff --cached --quiet; then
               git commit -m "chore: resolve upstream sync conflicts"
@@ -133,9 +133,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TOKEN="${GH_PAT:-$GITHUB_TOKEN}"
+          # Use GITHUB_TOKEN for PR creation; GHCR_PAT is for push and may not have repo scope.
+          TOKEN="${GITHUB_TOKEN:-}"
           if [ -z "${TOKEN}" ]; then
-            echo "No token available to create PR. Set GHCR_PAT with repo scope." >&2
+            TOKEN="${GH_PAT:-}"
+          fi
+          if [ -z "${TOKEN}" ]; then
+            echo "No token available to create PR. Set GITHUB_TOKEN or GHCR_PAT with repo scope." >&2
             exit 1
           fi
           BRANCH="${{ steps.prep.outputs.branch }}"
@@ -145,16 +149,9 @@ jobs:
           TITLE="chore: sync upstream release ${{ steps.latest.outputs.tag }}"
           BODY=$'This PR merges upstream release `${{ steps.latest.outputs.tag }}` from **${{ env.UPSTREAM_URL }}** into this repo.\n\n- CI must be green (branch protection enforces this).'
 
-          COMPARE_RAW=$(curl -sSL -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${OWNER}/${REPO}/compare/${BASE}...${BRANCH}")
-          COMPARE_BODY=$(echo "${COMPARE_RAW}" | sed '$d')
-          COMPARE_CODE=$(echo "${COMPARE_RAW}" | tail -n 1)
-          if [ "${COMPARE_CODE}" != "200" ]; then
-            echo "Compare API failed with status ${COMPARE_CODE}" >&2
-            echo "${COMPARE_BODY}" >&2
-            exit 1
-          fi
-          AHEAD_BY=$(echo "${COMPARE_BODY}" | jq -r '.ahead_by // 0')
+          git fetch origin "${BASE}"
+          BASE_REF="origin/${BASE}"
+          AHEAD_BY=$(git rev-list --count "${BASE_REF}..${BRANCH}")
           if [ "${AHEAD_BY}" -eq 0 ]; then
             echo "No commits between ${BASE} and ${BRANCH}; skipping PR creation."
             echo "pull-request-number=" >> "$GITHUB_OUTPUT"
@@ -166,15 +163,28 @@ jobs:
           if [ -n "${EXISTING}" ]; then
             PR_NUMBER="${EXISTING}"
           else
-            PR_NUMBER=$(curl -sSL -X POST -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
+            CREATE_PAYLOAD=$(jq -n \
+              --arg title "${TITLE}" \
+              --arg head "${BRANCH}" \
+              --arg base "${BASE}" \
+              --arg body "${BODY}" \
+              '{title:$title,head:$head,base:$base,body:$body}')
+            CREATE_RAW=$(curl -sSL -w "\n%{http_code}" -X POST -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${OWNER}/${REPO}/pulls" \
-              -d "{\"title\":\"${TITLE}\",\"head\":\"${BRANCH}\",\"base\":\"${BASE}\",\"body\":\"${BODY}\"}" | jq -r '.number // empty')
+              -d "${CREATE_PAYLOAD}")
+            CREATE_BODY=$(echo "${CREATE_RAW}" | sed '$d')
+            CREATE_CODE=$(echo "${CREATE_RAW}" | tail -n 1)
+            if [ "${CREATE_CODE}" != "201" ]; then
+              echo "PR create failed with status ${CREATE_CODE}" >&2
+              echo "${CREATE_BODY}" >&2
+              exit 1
+            fi
+            PR_NUMBER=$(echo "${CREATE_BODY}" | jq -r '.number // empty')
           fi
 
           if [ -z "${PR_NUMBER}" ]; then
-            echo "Failed to create or locate PR for ${BRANCH}; skipping." >&2
-            echo "pull-request-number=" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "Failed to create or locate PR for ${BRANCH}." >&2
+            exit 1
           fi
 
           echo "pull-request-number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
@@ -184,8 +194,21 @@ jobs:
             "https://api.github.com/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/labels" \
             -d '{"labels":["dependencies","upstream-sync"]}' >/dev/null || true
 
-      - name: Enable PR auto-merge (squash) once checks pass
+      - name: Check auto-merge setting
+        id: automerge
         if: steps.diffcheck.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number && steps.cpr.outputs.pull-request-number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+          ALLOW=$(curl -sSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}" | jq -r '.allow_auto_merge // false')
+          echo "allow_auto_merge=${ALLOW}" >> "$GITHUB_OUTPUT"
+
+      - name: Enable PR auto-merge (squash) once checks pass
+        if: steps.diffcheck.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number && steps.cpr.outputs.pull-request-number != '' && steps.automerge.outputs.allow_auto_merge == 'true'
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
           pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}

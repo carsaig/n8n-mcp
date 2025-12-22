@@ -62,7 +62,10 @@ export class N8NDocumentationMCPServer {
   private cache = new SimpleCache();
   private clientInfo: any = null;
 
-  constructor() {
+  // Optional params for compatibility with upstream call sites.
+  constructor(_instanceContext?: unknown, _earlyLogger?: unknown) {
+    void _instanceContext;
+    void _earlyLogger;
     // Check for test environment first
     const envDbPath = process.env.NODE_DB_PATH;
     let dbPath: string | null = null;
@@ -911,10 +914,12 @@ export class N8NDocumentationMCPServer {
         return n8nHandlers.handleGetWorkflowMinimal(args);
       case 'n8n_update_full_workflow':
         this.validateToolParams(name, args, ['id']);
-        return n8nHandlers.handleUpdateWorkflow(args);
+        if (!this.repository) throw new Error('Repository not initialized');
+        return n8nHandlers.handleUpdateWorkflow(args, this.repository, this.clientInfo?.context);
       case 'n8n_update_partial_workflow':
         this.validateToolParams(name, args, ['id', 'operations']);
-        return handleUpdatePartialWorkflow(args);
+        if (!this.repository) throw new Error('Repository not initialized');
+        return handleUpdatePartialWorkflow(args, this.repository, this.clientInfo?.context);
       case 'n8n_delete_workflow':
         this.validateToolParams(name, args, ['id']);
         return n8nHandlers.handleDeleteWorkflow(args);
@@ -943,7 +948,11 @@ export class N8NDocumentationMCPServer {
         return n8nHandlers.handleHealthCheck();
       case 'n8n_list_available_tools':
         // No required parameters
-        return n8nHandlers.handleListAvailableTools();
+        const handlersUnknown = n8nHandlers as unknown as { handleListAvailableTools?: () => Promise<unknown> };
+        if (typeof handlersUnknown.handleListAvailableTools !== 'function') {
+          throw new Error('n8n_list_available_tools is not available in this build');
+        }
+        return handlersUnknown.handleListAvailableTools();
       case 'n8n_diagnostic':
         // No required parameters
         return n8nHandlers.handleDiagnostic({ params: { arguments: args } });
