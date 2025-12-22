@@ -8,6 +8,13 @@
 import { ConfigValidator, ValidationResult, ValidationError, ValidationWarning } from './config-validator';
 import { NodeSpecificValidators, NodeValidationContext } from './node-specific-validators';
 import { FixedCollectionValidator } from '../utils/fixed-collection-validator';
+import { OperationSimilarityService } from './operation-similarity-service';
+import { ResourceSimilarityService } from './resource-similarity-service';
+import { NodeRepository } from '../database/node-repository';
+import { DatabaseAdapter } from '../database/database-adapter';
+import { NodeTypeNormalizer } from '../utils/node-type-normalizer';
+import { TypeStructureService } from './type-structure-service';
+import type { NodePropertyTypes } from 'n8n-workflow';
 
 export type ValidationMode = 'full' | 'operation' | 'minimal';
 export type ValidationProfile = 'strict' | 'runtime' | 'ai-friendly' | 'minimal';
@@ -35,6 +42,18 @@ export interface OperationContext {
 }
 
 export class EnhancedConfigValidator extends ConfigValidator {
+  private static operationSimilarityService: OperationSimilarityService | null = null;
+  private static resourceSimilarityService: ResourceSimilarityService | null = null;
+  private static nodeRepository: NodeRepository | null = null;
+
+  /**
+   * Initialize similarity services (called once at startup)
+   */
+  static initializeSimilarityServices(repository: NodeRepository): void {
+    this.nodeRepository = repository;
+    this.operationSimilarityService = new OperationSimilarityService(repository);
+    this.resourceSimilarityService = new ResourceSimilarityService(repository);
+  }
   /**
    * Validate with operation awareness
    */
@@ -60,17 +79,21 @@ export class EnhancedConfigValidator extends ConfigValidator {
     
     // Extract operation context from config
     const operationContext = this.extractOperationContext(config);
-    
-    // Filter properties based on mode and operation
-    const filteredProperties = this.filterPropertiesByMode(
+
+    // Extract user-provided keys before applying defaults (CRITICAL FIX for warning system)
+    const userProvidedKeys = new Set(Object.keys(config));
+
+    // Filter properties based on mode and operation, and get config with defaults
+    const { properties: filteredProperties, configWithDefaults } = this.filterPropertiesByMode(
       properties,
       config,
       mode,
       operationContext
     );
-    
-    // Perform base validation on filtered properties
-    const baseResult = super.validate(nodeType, config, filteredProperties);
+
+    // Perform base validation on filtered properties with defaults applied
+    // Pass userProvidedKeys to prevent warnings about default values
+    const baseResult = super.validate(nodeType, configWithDefaults, filteredProperties, userProvidedKeys);
     
     // Enhance the result
     const enhancedResult: EnhancedValidationResult = {
@@ -90,7 +113,7 @@ export class EnhancedConfigValidator extends ConfigValidator {
     this.applyProfileFilters(enhancedResult, profile);
     
     // Add operation-specific enhancements
-    this.addOperationSpecificEnhancements(nodeType, config, enhancedResult);
+    this.addOperationSpecificEnhancements(nodeType, config, filteredProperties, enhancedResult);
     
     // Deduplicate errors
     enhancedResult.errors = this.deduplicateErrors(enhancedResult.errors);
@@ -120,31 +143,56 @@ export class EnhancedConfigValidator extends ConfigValidator {
   
   /**
    * Filter properties based on validation mode and operation
+   * Returns both filtered properties and config with defaults
    */
   private static filterPropertiesByMode(
     properties: any[],
     config: Record<string, any>,
     mode: ValidationMode,
     operation: OperationContext
-  ): any[] {
+  ): { properties: any[], configWithDefaults: Record<string, any> } {
+    // Apply defaults for visibility checking
+    const configWithDefaults = this.applyNodeDefaults(properties, config);
+
+    let filteredProperties: any[];
     switch (mode) {
       case 'minimal':
         // Only required properties that are visible
-        return properties.filter(prop => 
-          prop.required && this.isPropertyVisible(prop, config)
+        filteredProperties = properties.filter(prop =>
+          prop.required && this.isPropertyVisible(prop, configWithDefaults)
         );
-        
+        break;
+
       case 'operation':
         // Only properties relevant to the current operation
-        return properties.filter(prop => 
-          this.isPropertyRelevantToOperation(prop, config, operation)
+        filteredProperties = properties.filter(prop =>
+          this.isPropertyRelevantToOperation(prop, configWithDefaults, operation)
         );
-        
+        break;
+
       case 'full':
       default:
         // All properties (current behavior)
-        return properties;
+        filteredProperties = properties;
+        break;
     }
+
+    return { properties: filteredProperties, configWithDefaults };
+  }
+
+  /**
+   * Apply node defaults to configuration for accurate visibility checking
+   */
+  private static applyNodeDefaults(properties: any[], config: Record<string, any>): Record<string, any> {
+    const result = { ...config };
+
+    for (const prop of properties) {
+      if (prop.name && prop.default !== undefined && result[prop.name] === undefined) {
+        result[prop.name] = prop.default;
+      }
+    }
+
+    return result;
   }
   
   /**
@@ -201,6 +249,7 @@ export class EnhancedConfigValidator extends ConfigValidator {
   private static addOperationSpecificEnhancements(
     nodeType: string,
     config: Record<string, any>,
+    properties: any[],
     result: EnhancedValidationResult
   ): void {
     // Type safety check - this should never happen with proper validation
@@ -213,7 +262,13 @@ export class EnhancedConfigValidator extends ConfigValidator {
       });
       return;
     }
-    
+
+    // Validate resource and operation using similarity services
+    this.validateResourceAndOperation(nodeType, config, result);
+
+    // Validate special type structures (filter, resourceMapper, assignmentCollection, resourceLocator)
+    this.validateSpecialTypeStructures(config, properties, result);
+
     // First, validate fixedCollection properties for known problematic nodes
     this.validateFixedCollectionStructures(nodeType, config, result);
     
@@ -269,7 +324,15 @@ export class EnhancedConfigValidator extends ConfigValidator {
       case 'nodes-base.mysql':
         NodeSpecificValidators.validateMySQL(context);
         break;
-        
+
+      case 'nodes-langchain.agent':
+        NodeSpecificValidators.validateAIAgent(context);
+        break;
+
+      case 'nodes-base.set':
+        NodeSpecificValidators.validateSet(context);
+        break;
+
       case 'nodes-base.switch':
         this.validateSwitchNodeStructure(config, result);
         break;
@@ -348,7 +411,59 @@ export class EnhancedConfigValidator extends ConfigValidator {
     config: Record<string, any>,
     result: EnhancedValidationResult
   ): void {
-    // Examples removed - validation provides error messages and fixes instead
+    const url = String(config.url || '');
+    const options = config.options || {};
+
+    // 1. Suggest alwaysOutputData for better error handling (node-level property)
+    // Note: We can't check if it exists (it's node-level, not in parameters),
+    // but we can suggest it as a best practice
+    if (!result.suggestions.some(s => typeof s === 'string' && s.includes('alwaysOutputData'))) {
+      result.suggestions.push(
+        'Consider adding alwaysOutputData: true at node level (not in parameters) for better error handling. ' +
+        'This ensures the node produces output even when HTTP requests fail, allowing downstream error handling.'
+      );
+    }
+
+    // 2. Suggest responseFormat for API endpoints
+    const lowerUrl = url.toLowerCase();
+    const isApiEndpoint =
+      // Subdomain patterns (api.example.com)
+      /^https?:\/\/api\./i.test(url) ||
+      // Path patterns with word boundaries to prevent false positives like "therapist", "restaurant"
+      /\/api[\/\?]|\/api$/i.test(url) ||
+      /\/rest[\/\?]|\/rest$/i.test(url) ||
+      // Known API service domains
+      lowerUrl.includes('supabase.co') ||
+      lowerUrl.includes('firebase') ||
+      lowerUrl.includes('googleapis.com') ||
+      // Versioned API paths (e.g., example.com/v1, example.com/v2)
+      /\.com\/v\d+/i.test(url);
+
+    if (isApiEndpoint && !options.response?.response?.responseFormat) {
+      result.suggestions.push(
+        'API endpoints should explicitly set options.response.response.responseFormat to "json" or "text" ' +
+        'to prevent confusion about response parsing. Example: ' +
+        '{ "options": { "response": { "response": { "responseFormat": "json" } } } }'
+      );
+    }
+
+    // 3. Enhanced URL protocol validation for expressions
+    if (url && url.startsWith('=')) {
+      // Expression-based URL - check for common protocol issues
+      const expressionContent = url.slice(1); // Remove = prefix
+      const lowerExpression = expressionContent.toLowerCase();
+
+      // Check for missing protocol in expression (case-insensitive)
+      if (expressionContent.startsWith('www.') ||
+          (expressionContent.includes('{{') && !lowerExpression.includes('http'))) {
+        result.warnings.push({
+          type: 'invalid_value',
+          property: 'url',
+          message: 'URL expression appears to be missing http:// or https:// protocol',
+          suggestion: 'Include protocol in your expression. Example: ={{ "https://" + $json.domain + ".com" }}'
+        });
+      }
+    }
   }
   
   /**
@@ -414,6 +529,15 @@ export class EnhancedConfigValidator extends ConfigValidator {
   }
   
   /**
+   * Check if a warning should be filtered out (hardcoded credentials shown only in strict mode)
+   */
+  private static shouldFilterCredentialWarning(warning: ValidationWarning): boolean {
+    return warning.type === 'security' &&
+           warning.message !== undefined &&
+           warning.message.includes('Hardcoded nodeCredentialType');
+  }
+
+  /**
    * Apply profile-based filtering to validation results
    */
   private static applyProfileFilters(
@@ -424,22 +548,40 @@ export class EnhancedConfigValidator extends ConfigValidator {
       case 'minimal':
         // Only keep missing required errors
         result.errors = result.errors.filter(e => e.type === 'missing_required');
-        result.warnings = [];
+        // Keep ONLY critical warnings (security and deprecated)
+        // But filter out hardcoded credential type warnings (only show in strict mode)
+        result.warnings = result.warnings.filter(w => {
+          if (this.shouldFilterCredentialWarning(w)) {
+            return false;
+          }
+          return w.type === 'security' || w.type === 'deprecated';
+        });
         result.suggestions = [];
         break;
-        
+
       case 'runtime':
         // Keep critical runtime errors only
-        result.errors = result.errors.filter(e => 
-          e.type === 'missing_required' || 
+        result.errors = result.errors.filter(e =>
+          e.type === 'missing_required' ||
           e.type === 'invalid_value' ||
           (e.type === 'invalid_type' && e.message.includes('undefined'))
         );
-        // Keep only security warnings
-        result.warnings = result.warnings.filter(w => w.type === 'security');
+        // Keep security and deprecated warnings, REMOVE property visibility warnings
+        result.warnings = result.warnings.filter(w => {
+          // Filter out hardcoded credential type warnings (only show in strict mode)
+          if (this.shouldFilterCredentialWarning(w)) {
+            return false;
+          }
+          if (w.type === 'security' || w.type === 'deprecated') return true;
+          // FILTER OUT property visibility warnings (too noisy)
+          if (w.type === 'inefficient' && w.message && w.message.includes('not visible')) {
+            return false;
+          }
+          return false;
+        });
         result.suggestions = [];
         break;
-        
+
       case 'strict':
         // Keep everything, add more suggestions
         if (result.warnings.length === 0 && result.errors.length === 0) {
@@ -449,14 +591,32 @@ export class EnhancedConfigValidator extends ConfigValidator {
         // Require error handling for external service nodes
         this.enforceErrorHandlingForProfile(result, profile);
         break;
-        
+
       case 'ai-friendly':
       default:
         // Current behavior - balanced for AI agents
         // Filter out noise but keep helpful warnings
-        result.warnings = result.warnings.filter(w => 
-          w.type !== 'inefficient' || !w.property?.startsWith('_')
-        );
+        result.warnings = result.warnings.filter(w => {
+          // Filter out hardcoded credential type warnings (only show in strict mode)
+          if (this.shouldFilterCredentialWarning(w)) {
+            return false;
+          }
+          // Keep security and deprecated warnings
+          if (w.type === 'security' || w.type === 'deprecated') return true;
+          // Keep missing common properties
+          if (w.type === 'missing_common') return true;
+          // Keep best practice warnings
+          if (w.type === 'best_practice') return true;
+          // FILTER OUT inefficient warnings about property visibility (now fixed at source)
+          if (w.type === 'inefficient' && w.message && w.message.includes('not visible')) {
+            return false; // These are now rare due to userProvidedKeys fix
+          }
+          // Filter out internal property warnings
+          if (w.type === 'inefficient' && w.property?.startsWith('_')) {
+            return false;
+          }
+          return true;
+        });
         // Add error handling suggestions for AI-friendly profile
         this.addErrorHandlingSuggestions(result);
         break;
@@ -641,5 +801,467 @@ export class EnhancedConfigValidator extends ConfigValidator {
     if (hasFixedCollectionError) return;
     
     // Add any Filter-node-specific validation here in the future
+  }
+
+  /**
+   * Validate resource and operation values using similarity services
+   */
+  private static validateResourceAndOperation(
+    nodeType: string,
+    config: Record<string, any>,
+    result: EnhancedValidationResult
+  ): void {
+    // Skip if similarity services not initialized
+    if (!this.operationSimilarityService || !this.resourceSimilarityService || !this.nodeRepository) {
+      return;
+    }
+
+    // Normalize the node type for repository lookups
+    const normalizedNodeType = NodeTypeNormalizer.normalizeToFullForm(nodeType);
+
+    // Apply defaults for validation
+    const configWithDefaults = { ...config };
+
+    // If operation is undefined but resource is set, get the default operation for that resource
+    if (configWithDefaults.operation === undefined && configWithDefaults.resource !== undefined) {
+      const defaultOperation = this.nodeRepository.getDefaultOperationForResource(normalizedNodeType, configWithDefaults.resource);
+      if (defaultOperation !== undefined) {
+        configWithDefaults.operation = defaultOperation;
+      }
+    }
+
+    // Validate resource field if present
+    if (config.resource !== undefined) {
+      // Remove any existing resource error from base validator to replace with our enhanced version
+      result.errors = result.errors.filter(e => e.property !== 'resource');
+      const validResources = this.nodeRepository.getNodeResources(normalizedNodeType);
+      const resourceIsValid = validResources.some(r => {
+        const resourceValue = typeof r === 'string' ? r : r.value;
+        return resourceValue === config.resource;
+      });
+
+      if (!resourceIsValid && config.resource !== '') {
+        // Find similar resources
+        let suggestions: any[] = [];
+        try {
+          suggestions = this.resourceSimilarityService.findSimilarResources(
+            normalizedNodeType,
+            config.resource,
+            3
+          );
+        } catch (error) {
+          // If similarity service fails, continue with validation without suggestions
+          console.error('Resource similarity service error:', error);
+        }
+
+        // Build error message with suggestions
+        let errorMessage = `Invalid resource "${config.resource}" for node ${nodeType}.`;
+        let fix = '';
+
+        if (suggestions.length > 0) {
+          const topSuggestion = suggestions[0];
+          // Always use "Did you mean" for the top suggestion
+          errorMessage += ` Did you mean "${topSuggestion.value}"?`;
+          if (topSuggestion.confidence >= 0.8) {
+            fix = `Change resource to "${topSuggestion.value}". ${topSuggestion.reason}`;
+          } else {
+            // For lower confidence, still show valid resources in the fix
+            fix = `Valid resources: ${validResources.slice(0, 5).map(r => {
+              const val = typeof r === 'string' ? r : r.value;
+              return `"${val}"`;
+            }).join(', ')}${validResources.length > 5 ? '...' : ''}`;
+          }
+        } else {
+          // No similar resources found, list valid ones
+          fix = `Valid resources: ${validResources.slice(0, 5).map(r => {
+            const val = typeof r === 'string' ? r : r.value;
+            return `"${val}"`;
+          }).join(', ')}${validResources.length > 5 ? '...' : ''}`;
+        }
+
+        const error: any = {
+          type: 'invalid_value',
+          property: 'resource',
+          message: errorMessage,
+          fix
+        };
+
+        // Add suggestion property if we have high confidence suggestions
+        if (suggestions.length > 0 && suggestions[0].confidence >= 0.5) {
+          error.suggestion = `Did you mean "${suggestions[0].value}"? ${suggestions[0].reason}`;
+        }
+
+        result.errors.push(error);
+
+        // Add suggestions to result.suggestions array
+        if (suggestions.length > 0) {
+          for (const suggestion of suggestions) {
+            result.suggestions.push(
+              `Resource "${config.resource}" not found. Did you mean "${suggestion.value}"? ${suggestion.reason}`
+            );
+          }
+        }
+      }
+    }
+
+    // Validate operation field - now we check configWithDefaults which has defaults applied
+    // Only validate if operation was explicitly set (not undefined) OR if we're using a default
+    if (config.operation !== undefined || configWithDefaults.operation !== undefined) {
+      // Remove any existing operation error from base validator to replace with our enhanced version
+      result.errors = result.errors.filter(e => e.property !== 'operation');
+
+      // Use the operation from configWithDefaults for validation (which includes the default if applied)
+      const operationToValidate = configWithDefaults.operation || config.operation;
+      const validOperations = this.nodeRepository.getNodeOperations(normalizedNodeType, config.resource);
+      const operationIsValid = validOperations.some(op => {
+        const opValue = op.operation || op.value || op;
+        return opValue === operationToValidate;
+      });
+
+      // Only report error if the explicit operation is invalid (not for defaults)
+      if (!operationIsValid && config.operation !== undefined && config.operation !== '') {
+        // Find similar operations
+        let suggestions: any[] = [];
+        try {
+          suggestions = this.operationSimilarityService.findSimilarOperations(
+            normalizedNodeType,
+            config.operation,
+            config.resource,
+            3
+          );
+        } catch (error) {
+          // If similarity service fails, continue with validation without suggestions
+          console.error('Operation similarity service error:', error);
+        }
+
+        // Build error message with suggestions
+        let errorMessage = `Invalid operation "${config.operation}" for node ${nodeType}`;
+        if (config.resource) {
+          errorMessage += ` with resource "${config.resource}"`;
+        }
+        errorMessage += '.';
+
+        let fix = '';
+
+        if (suggestions.length > 0) {
+          const topSuggestion = suggestions[0];
+          if (topSuggestion.confidence >= 0.8) {
+            errorMessage += ` Did you mean "${topSuggestion.value}"?`;
+            fix = `Change operation to "${topSuggestion.value}". ${topSuggestion.reason}`;
+          } else {
+            errorMessage += ` Similar operations: ${suggestions.map(s => `"${s.value}"`).join(', ')}`;
+            fix = `Valid operations${config.resource ? ` for resource "${config.resource}"` : ''}: ${validOperations.slice(0, 5).map(op => {
+              const val = op.operation || op.value || op;
+              return `"${val}"`;
+            }).join(', ')}${validOperations.length > 5 ? '...' : ''}`;
+          }
+        } else {
+          // No similar operations found, list valid ones
+          fix = `Valid operations${config.resource ? ` for resource "${config.resource}"` : ''}: ${validOperations.slice(0, 5).map(op => {
+            const val = op.operation || op.value || op;
+            return `"${val}"`;
+          }).join(', ')}${validOperations.length > 5 ? '...' : ''}`;
+        }
+
+        const error: any = {
+          type: 'invalid_value',
+          property: 'operation',
+          message: errorMessage,
+          fix
+        };
+
+        // Add suggestion property if we have high confidence suggestions
+        if (suggestions.length > 0 && suggestions[0].confidence >= 0.5) {
+          error.suggestion = `Did you mean "${suggestions[0].value}"? ${suggestions[0].reason}`;
+        }
+
+        result.errors.push(error);
+
+        // Add suggestions to result.suggestions array
+        if (suggestions.length > 0) {
+          for (const suggestion of suggestions) {
+            result.suggestions.push(
+              `Operation "${config.operation}" not found. Did you mean "${suggestion.value}"? ${suggestion.reason}`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate special type structures (filter, resourceMapper, assignmentCollection, resourceLocator)
+   *
+   * Integrates TypeStructureService to validate complex property types against their
+   * expected structures. This catches configuration errors for advanced node types.
+   *
+   * @param config - Node configuration to validate
+   * @param properties - Property definitions from node schema
+   * @param result - Validation result to populate with errors/warnings
+   */
+  private static validateSpecialTypeStructures(
+    config: Record<string, any>,
+    properties: any[],
+    result: EnhancedValidationResult
+  ): void {
+    for (const [key, value] of Object.entries(config)) {
+      if (value === undefined || value === null) continue;
+
+      // Find property definition
+      const propDef = properties.find(p => p.name === key);
+      if (!propDef) continue;
+
+      // Check if this property uses a special type
+      let structureType: NodePropertyTypes | null = null;
+
+      if (propDef.type === 'filter') {
+        structureType = 'filter';
+      } else if (propDef.type === 'resourceMapper') {
+        structureType = 'resourceMapper';
+      } else if (propDef.type === 'assignmentCollection') {
+        structureType = 'assignmentCollection';
+      } else if (propDef.type === 'resourceLocator') {
+        structureType = 'resourceLocator';
+      }
+
+      if (!structureType) continue;
+
+      // Get structure definition
+      const structure = TypeStructureService.getStructure(structureType);
+      if (!structure) {
+        console.warn(`No structure definition found for type: ${structureType}`);
+        continue;
+      }
+
+      // Validate using TypeStructureService for basic type checking
+      const validationResult = TypeStructureService.validateTypeCompatibility(
+        value,
+        structureType
+      );
+
+      // Add errors from structure validation
+      if (!validationResult.valid) {
+        for (const error of validationResult.errors) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: key,
+            message: error,
+            fix: `Ensure ${key} follows the expected structure for ${structureType} type. Example: ${JSON.stringify(structure.example)}`
+          });
+        }
+      }
+
+      // Add warnings
+      for (const warning of validationResult.warnings) {
+        result.warnings.push({
+          type: 'best_practice',
+          property: key,
+          message: warning
+        });
+      }
+
+      // Perform deep structure validation for complex types
+      if (typeof value === 'object' && value !== null) {
+        this.validateComplexTypeStructure(key, value, structureType, structure, result);
+      }
+
+      // Special handling for filter operation validation
+      if (structureType === 'filter' && value.conditions) {
+        this.validateFilterOperations(value.conditions, key, result);
+      }
+    }
+  }
+
+  /**
+   * Deep validation for complex type structures
+   */
+  private static validateComplexTypeStructure(
+    propertyName: string,
+    value: any,
+    type: NodePropertyTypes,
+    structure: any,
+    result: EnhancedValidationResult
+  ): void {
+    switch (type) {
+      case 'filter':
+        // Validate filter structure: must have combinator and conditions
+        if (!value.combinator) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.combinator`,
+            message: 'Filter must have a combinator field',
+            fix: 'Add combinator: "and" or combinator: "or" to the filter configuration'
+          });
+        } else if (value.combinator !== 'and' && value.combinator !== 'or') {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.combinator`,
+            message: `Invalid combinator value: ${value.combinator}. Must be "and" or "or"`,
+            fix: 'Set combinator to either "and" or "or"'
+          });
+        }
+
+        if (!value.conditions) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.conditions`,
+            message: 'Filter must have a conditions field',
+            fix: 'Add conditions array to the filter configuration'
+          });
+        } else if (!Array.isArray(value.conditions)) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.conditions`,
+            message: 'Filter conditions must be an array',
+            fix: 'Ensure conditions is an array of condition objects'
+          });
+        }
+        break;
+
+      case 'resourceLocator':
+        // Validate resourceLocator structure: must have mode and value
+        if (!value.mode) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.mode`,
+            message: 'ResourceLocator must have a mode field',
+            fix: 'Add mode: "id", mode: "url", or mode: "list" to the resourceLocator configuration'
+          });
+        } else if (!['id', 'url', 'list', 'name'].includes(value.mode)) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.mode`,
+            message: `Invalid mode value: ${value.mode}. Must be "id", "url", "list", or "name"`,
+            fix: 'Set mode to one of: "id", "url", "list", "name"'
+          });
+        }
+
+        if (!value.hasOwnProperty('value')) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.value`,
+            message: 'ResourceLocator must have a value field',
+            fix: 'Add value field to the resourceLocator configuration'
+          });
+        }
+        break;
+
+      case 'assignmentCollection':
+        // Validate assignmentCollection structure: must have assignments array
+        if (!value.assignments) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.assignments`,
+            message: 'AssignmentCollection must have an assignments field',
+            fix: 'Add assignments array to the assignmentCollection configuration'
+          });
+        } else if (!Array.isArray(value.assignments)) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.assignments`,
+            message: 'AssignmentCollection assignments must be an array',
+            fix: 'Ensure assignments is an array of assignment objects'
+          });
+        }
+        break;
+
+      case 'resourceMapper':
+        // Validate resourceMapper structure: must have mappingMode
+        if (!value.mappingMode) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.mappingMode`,
+            message: 'ResourceMapper must have a mappingMode field',
+            fix: 'Add mappingMode: "defineBelow" or mappingMode: "autoMapInputData"'
+          });
+        } else if (!['defineBelow', 'autoMapInputData'].includes(value.mappingMode)) {
+          result.errors.push({
+            type: 'invalid_configuration',
+            property: `${propertyName}.mappingMode`,
+            message: `Invalid mappingMode: ${value.mappingMode}. Must be "defineBelow" or "autoMapInputData"`,
+            fix: 'Set mappingMode to either "defineBelow" or "autoMapInputData"'
+          });
+        }
+        break;
+    }
+  }
+
+  /**
+   * Validate filter operations match operator types
+   *
+   * Ensures that filter operations are compatible with their operator types.
+   * For example, 'gt' (greater than) is only valid for numbers, not strings.
+   *
+   * @param conditions - Array of filter conditions to validate
+   * @param propertyName - Name of the filter property (for error reporting)
+   * @param result - Validation result to populate with errors
+   */
+  private static validateFilterOperations(
+    conditions: any,
+    propertyName: string,
+    result: EnhancedValidationResult
+  ): void {
+    if (!Array.isArray(conditions)) return;
+
+    // Operation validation rules based on n8n filter type definitions
+    const VALID_OPERATIONS_BY_TYPE: Record<string, string[]> = {
+      string: [
+        'empty', 'notEmpty', 'equals', 'notEquals',
+        'contains', 'notContains', 'startsWith', 'notStartsWith',
+        'endsWith', 'notEndsWith', 'regex', 'notRegex',
+        'exists', 'notExists', 'isNotEmpty' // exists checks field presence, isNotEmpty alias for notEmpty
+      ],
+      number: [
+        'empty', 'notEmpty', 'equals', 'notEquals', 'gt', 'lt', 'gte', 'lte',
+        'exists', 'notExists', 'isNotEmpty'
+      ],
+      dateTime: [
+        'empty', 'notEmpty', 'equals', 'notEquals', 'after', 'before', 'afterOrEquals', 'beforeOrEquals',
+        'exists', 'notExists', 'isNotEmpty'
+      ],
+      boolean: [
+        'empty', 'notEmpty', 'true', 'false', 'equals', 'notEquals',
+        'exists', 'notExists', 'isNotEmpty'
+      ],
+      array: [
+        'contains', 'notContains', 'lengthEquals', 'lengthNotEquals',
+        'lengthGt', 'lengthLt', 'lengthGte', 'lengthLte', 'empty', 'notEmpty',
+        'exists', 'notExists', 'isNotEmpty'
+      ],
+      object: [
+        'empty', 'notEmpty',
+        'exists', 'notExists', 'isNotEmpty'
+      ],
+      any: ['exists', 'notExists', 'isNotEmpty']
+    };
+
+    for (let i = 0; i < conditions.length; i++) {
+      const condition = conditions[i];
+      if (!condition.operator || typeof condition.operator !== 'object') continue;
+
+      const { type, operation } = condition.operator;
+      if (!type || !operation) continue;
+
+      // Get valid operations for this type
+      const validOperations = VALID_OPERATIONS_BY_TYPE[type];
+      if (!validOperations) {
+        result.warnings.push({
+          type: 'best_practice',
+          property: `${propertyName}.conditions[${i}].operator.type`,
+          message: `Unknown operator type: ${type}`
+        });
+        continue;
+      }
+
+      // Check if operation is valid for this type
+      if (!validOperations.includes(operation)) {
+        result.errors.push({
+          type: 'invalid_value',
+          property: `${propertyName}.conditions[${i}].operator.operation`,
+          message: `Operation '${operation}' is not valid for type '${type}'`,
+          fix: `Use one of the valid operations for ${type}: ${validOperations.join(', ')}`
+        });
+      }
+    }
   }
 }

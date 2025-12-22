@@ -411,17 +411,17 @@ describe('HTTP Server Session Management', () => {
 
     it('should handle removeSession with transport close error gracefully', async () => {
       server = new SingleSessionHTTPServer();
-      
-      const mockTransport = { 
+
+      const mockTransport = {
         close: vi.fn().mockRejectedValue(new Error('Transport close failed'))
       };
       (server as any).transports = { 'test-session': mockTransport };
       (server as any).servers = { 'test-session': {} };
-      (server as any).sessionMetadata = { 
-        'test-session': { 
+      (server as any).sessionMetadata = {
+        'test-session': {
           lastAccess: new Date(),
           createdAt: new Date()
-        } 
+        }
       };
 
       // Should not throw even if transport close fails
@@ -429,10 +429,66 @@ describe('HTTP Server Session Management', () => {
 
       // Verify transport close was attempted
       expect(mockTransport.close).toHaveBeenCalled();
-      
+
       // Session should still be cleaned up despite transport error
       // Note: The actual implementation may handle errors differently, so let's verify what we can
       expect(mockTransport.close).toHaveBeenCalledWith();
+    });
+
+    it('should not cause infinite recursion when transport.close triggers onclose handler', async () => {
+      server = new SingleSessionHTTPServer();
+
+      const sessionId = 'test-recursion-session';
+      let closeCallCount = 0;
+      let oncloseCallCount = 0;
+
+      // Create a mock transport that simulates the actual behavior
+      const mockTransport = {
+        close: vi.fn().mockImplementation(async () => {
+          closeCallCount++;
+          // Simulate the actual SDK behavior: close() triggers onclose handler
+          if (mockTransport.onclose) {
+            oncloseCallCount++;
+            await mockTransport.onclose();
+          }
+        }),
+        onclose: null as (() => Promise<void>) | null,
+        sessionId
+      };
+
+      // Set up the transport and session data
+      (server as any).transports = { [sessionId]: mockTransport };
+      (server as any).servers = { [sessionId]: {} };
+      (server as any).sessionMetadata = {
+        [sessionId]: {
+          lastAccess: new Date(),
+          createdAt: new Date()
+        }
+      };
+
+      // Set up onclose handler like the real implementation does
+      // This handler calls removeSession, which could cause infinite recursion
+      mockTransport.onclose = async () => {
+        await (server as any).removeSession(sessionId, 'transport_closed');
+      };
+
+      // Call removeSession - this should NOT cause infinite recursion
+      await (server as any).removeSession(sessionId, 'manual_removal');
+
+      // Verify the fix works:
+      // 1. close() should be called exactly once
+      expect(closeCallCount).toBe(1);
+
+      // 2. onclose handler should be triggered
+      expect(oncloseCallCount).toBe(1);
+
+      // 3. Transport should be deleted and not cause second close attempt
+      expect((server as any).transports[sessionId]).toBeUndefined();
+      expect((server as any).servers[sessionId]).toBeUndefined();
+      expect((server as any).sessionMetadata[sessionId]).toBeUndefined();
+
+      // 4. If there was a recursion bug, closeCallCount would be > 1
+      // or the test would timeout/crash with "Maximum call stack size exceeded"
     });
   });
 
@@ -780,13 +836,48 @@ describe('HTTP Server Session Management', () => {
         });
       });
 
-      it('should return 400 for invalid session ID format', async () => {
+      it('should return 404 for non-existent session (any format accepted)', async () => {
+        server = new SingleSessionHTTPServer();
+        await server.start();
+
+        const handler = findHandler('delete', '/mcp');
+
+        // Test various session ID formats - all should pass validation
+        // but return 404 if session doesn't exist
+        const sessionIds = [
+          'invalid-session-id',
+          'instance-user123-abc-uuid',
+          'mcp-remote-session-xyz',
+          'short-id',
+          '12345'
+        ];
+
+        for (const sessionId of sessionIds) {
+          const { req, res } = createMockReqRes();
+          req.headers = { 'mcp-session-id': sessionId };
+          req.method = 'DELETE';
+
+          await handler(req, res);
+
+          expect(res.status).toHaveBeenCalledWith(404); // Session not found
+          expect(res.json).toHaveBeenCalledWith({
+            jsonrpc: '2.0',
+            error: {
+              code: -32001,
+              message: 'Session not found'
+            },
+            id: null
+          });
+        }
+      });
+
+      it('should return 400 for empty session ID', async () => {
         server = new SingleSessionHTTPServer();
         await server.start();
 
         const handler = findHandler('delete', '/mcp');
         const { req, res } = createMockReqRes();
-        req.headers = { 'mcp-session-id': 'invalid-session-id' };
+        req.headers = { 'mcp-session-id': '' };
         req.method = 'DELETE';
 
         await handler(req, res);
@@ -796,7 +887,7 @@ describe('HTTP Server Session Management', () => {
           jsonrpc: '2.0',
           error: {
             code: -32602,
-            message: 'Invalid session ID format'
+            message: 'Mcp-Session-Id header is required'
           },
           id: null
         });
@@ -912,40 +1003,64 @@ describe('HTTP Server Session Management', () => {
   });
 
   describe('Session ID Validation', () => {
-    it('should validate UUID v4 format correctly', async () => {
+    it('should accept any non-empty string as session ID', async () => {
       server = new SingleSessionHTTPServer();
-      
-      const validUUIDs = [
-        'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', // 8 is valid variant
-        '12345678-1234-4567-8901-123456789012', // 8 is valid variant
-        'f47ac10b-58cc-4372-a567-0e02b2c3d479' // a is valid variant
-      ];
 
-      const invalidUUIDs = [
-        'invalid-uuid',
-        'aaaaaaaa-bbbb-3ccc-8ddd-eeeeeeeeeeee', // Wrong version (3)
-        'aaaaaaaa-bbbb-4ccc-cddd-eeeeeeeeeeee', // Wrong variant (c)
+      // Valid session IDs - any non-empty string is accepted
+      const validSessionIds = [
+        // UUIDv4 format (existing format - still valid)
+        'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        '12345678-1234-4567-8901-123456789012',
+        'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+
+        // Instance-prefixed format (multi-tenant)
+        'instance-user123-abc123-550e8400-e29b-41d4-a716-446655440000',
+
+        // Custom formats (mcp-remote, proxies, etc.)
+        'mcp-remote-session-xyz',
+        'custom-session-format',
         'short-uuid',
-        '',
-        'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee-extra'
+        'invalid-uuid', // "invalid" UUID is valid as generic string
+        '12345',
+
+        // Even "wrong" UUID versions are accepted (relaxed validation)
+        'aaaaaaaa-bbbb-3ccc-8ddd-eeeeeeeeeeee', // UUID v3
+        'aaaaaaaa-bbbb-4ccc-cddd-eeeeeeeeeeee', // Wrong variant
+        'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee-extra', // Extra chars
+
+        // Any non-empty string works
+        'anything-goes'
       ];
 
-      for (const uuid of validUUIDs) {
-        expect((server as any).isValidSessionId(uuid)).toBe(true);
+      // Invalid session IDs - only empty strings
+      const invalidSessionIds = [
+        ''
+      ];
+
+      // All non-empty strings should be accepted
+      for (const sessionId of validSessionIds) {
+        expect((server as any).isValidSessionId(sessionId)).toBe(true);
       }
 
-      for (const uuid of invalidUUIDs) {
-        expect((server as any).isValidSessionId(uuid)).toBe(false);
+      // Only empty strings should be rejected
+      for (const sessionId of invalidSessionIds) {
+        expect((server as any).isValidSessionId(sessionId)).toBe(false);
       }
     });
 
-    it('should reject requests with invalid session ID format', async () => {
+    it('should accept non-empty strings, reject only empty strings', async () => {
       server = new SingleSessionHTTPServer();
-      
-      // Test the validation method directly
-      expect((server as any).isValidSessionId('invalid-session-id')).toBe(false);
-      expect((server as any).isValidSessionId('')).toBe(false);
+
+      // These should all be ACCEPTED (return true) - any non-empty string
+      expect((server as any).isValidSessionId('invalid-session-id')).toBe(true);
+      expect((server as any).isValidSessionId('short')).toBe(true);
+      expect((server as any).isValidSessionId('instance-user-abc-123')).toBe(true);
+      expect((server as any).isValidSessionId('mcp-remote-xyz')).toBe(true);
+      expect((server as any).isValidSessionId('12345')).toBe(true);
       expect((server as any).isValidSessionId('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')).toBe(true);
+
+      // Only empty string should be REJECTED (return false)
+      expect((server as any).isValidSessionId('')).toBe(false);
     });
 
     it('should reject requests with non-existent session ID', async () => {
