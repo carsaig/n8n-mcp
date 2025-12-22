@@ -1,4 +1,4 @@
-# Release v2.30.2-cs.1
+# Release v2.30.2-cs.5
 
 Date: 2025-12-22
 
@@ -7,6 +7,13 @@ Date: 2025-12-22
 
 ## Changes since v2.11.3
 ```
+a39b265 chore: retrigger checks
+4aab149 chore: compose/docs bump and release notes for v2.30.2-cs.4
+8dfe7eb chore: compose/docs bump and release notes for v2.30.2-cs.2
+f63dcab chore: use latest image in Coolify compose
+5901aba ci: trigger release on main merges
+b3f2fb5 test: make templates database validation critical instead of optional
+5767c63 chore: compose/docs bump and release notes for v2.30.2-cs.1
 a932c7d fix: add builder deps for supabase and lru-cache
 36c2581 chore: retrigger required checks
 d135459 fix: robust sync conflict resolution
@@ -450,5 +457,5 @@ b547a47 feat: add comprehensive release notes and Cloudflare proxy configuration
 7bad206 test: verify SSH commit signing works```
 
 ## Container images
-- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.5s.4s.2s.1
-- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.5s.4s.2st
+- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.5
+- ghcr.io/carsaig/n8n-mcp:latest
