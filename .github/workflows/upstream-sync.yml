@@ -82,8 +82,18 @@ jobs:
           # Create branch from origin/main and merge upstream release commit
           git checkout -B "${BRANCH}" origin/main
           if ! git merge --no-ff --no-edit "${OID}"; then
-            echo "Merge conflict while preparing ${BRANCH}" >&2
-            exit 1
+            echo "Merge conflict while preparing ${BRANCH}. Applying fork-vs-upstream resolution policy..." >&2
+            # Keep fork-specific workflows and deployment setup
+            git checkout --ours -- .github/workflows Dockerfile src/http-server.ts AGENTS.md CLAUDE.md || true
+            # Take upstream for the rest of the known conflict set
+            git checkout --theirs -- MEMORY_N8N_UPDATE.md README.md docs/CHANGELOG.md package-lock.json package.json src/mcp/server.ts || true
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: resolve upstream sync conflicts"
+            else
+              echo "No conflict resolutions staged; failing for manual review." >&2
+              exit 1
+            fi
           fi
           # Clean up temp tag
           git tag -d _tmp_upstream_tag >/dev/null 2>&1 || true
