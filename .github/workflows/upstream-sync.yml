@@ -143,12 +143,15 @@ jobs:
               --base "${{ github.event.repository.default_branch }}" \
               --head "${BRANCH}" \
               --title "${TITLE}" \
-              --body "${BODY}" \
-              --label "dependencies,upstream-sync"
+              --body "${BODY}"
           fi
 
           PR_NUMBER=$(gh pr view --head "${BRANCH}" --json number -q .number)
           echo "pull-request-number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+          # Add labels if they exist; don't fail the workflow if they don't.
+          gh pr edit "${PR_NUMBER}" --add-label "dependencies" || true
+          gh pr edit "${PR_NUMBER}" --add-label "upstream-sync" || true
 
       - name: Enable PR auto-merge (squash) once checks pass
         if: steps.diffcheck.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number && steps.cpr.outputs.pull-request-number != ''
