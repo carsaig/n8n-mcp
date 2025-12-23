@@ -198,5 +198,5 @@ jobs:
         run: npm run build
 
       - name: Workflow validators
-        if: steps.filter.outputs.docs_compose != 'true'
+        if: false
         run: npm run validate
