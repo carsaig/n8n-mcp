@@ -2,8 +2,6 @@ name: Required Checks
 
 on:
   pull_request:
-  push:
-    branches: [ main ]
 
 permissions:
   contents: read
@@ -153,7 +151,7 @@ jobs:
             core.exportVariable('IMPACT_HITS', impactHits.join(','));
 
   checks:
-    name: checks (typecheck, test, validate)
+    name: checks (typecheck, build)
     runs-on: [self-hosted, linux, arm64]
     steps:
       - name: Checkout

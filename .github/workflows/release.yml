@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -27,6 +25,10 @@ permissions:
   packages: write
   pull-requests: write
   issues: write
+
+concurrency:
+  group: release
+  cancel-in-progress: true
 
 env:
   IMAGE_NAME: ghcr.io/carsaig/n8n-mcp
