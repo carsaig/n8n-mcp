@@ -30,7 +30,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/carsaig/n8n-mcp
-  COOLIFY_WEBHOOK_URL: https://coolify.certain.cc/api/v1/deploy?uuid=dokk88s84sgcwg848k044o4k&force=false
+  COOLIFY_WEBHOOK_URL: https://coolify.certain.cc/api/v1/deploy?uuid=ng0woc4ks408skwcg4c4gcko&force=true
 
 jobs:
   release:
@@ -268,7 +268,7 @@ jobs:
             documentation
 
       - name: Start GitHub Deployment
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
+        if: ${{ needs.release.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
         id: gh_deploy_start
         uses: bobheadxi/deployments@v1
         with:
@@ -278,7 +278,7 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Load secrets from 1Password
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
+        if: ${{ needs.release.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
         uses: 1password/load-secrets-action@v2
         with:
           export-env: true
@@ -287,7 +287,7 @@ jobs:
           COOLIFY_API_KEY: "op://SECRETS/Coolify/API_Token"
 
       - name: Trigger Coolify Deploy (by UUID)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.trigger_coolify }}
+        if: ${{ needs.release.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
         shell: bash
         run: |
           set -euo pipefail
