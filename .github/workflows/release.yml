@@ -142,6 +142,10 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
 
+      - name: Mark build complete
+        id: build_complete
+        run: echo "built=true" >> "$GITHUB_OUTPUT"
+
       - name: Echo built image tag
         run: |
           echo "Image: ${IMAGE_NAME}"
@@ -270,7 +274,7 @@ jobs:
             documentation
 
       - name: Start GitHub Deployment
-        if: ${{ needs.release.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
+        if: ${{ needs.release.result == 'success' && needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
         id: gh_deploy_start
         uses: bobheadxi/deployments@v1
         with:
@@ -280,7 +284,7 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Load secrets from 1Password
-        if: ${{ needs.release.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
+        if: ${{ needs.release.result == 'success' && needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
         uses: 1password/load-secrets-action@v2
         with:
           export-env: true
@@ -289,7 +293,7 @@ jobs:
           COOLIFY_API_KEY: "op://SECRETS/Coolify/API_Token"
 
       - name: Trigger Coolify Deploy (by UUID)
-        if: ${{ needs.release.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
+        if: ${{ needs.release.result == 'success' && needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || inputs.trigger_coolify) }}
         shell: bash
         run: |
           set -euo pipefail
