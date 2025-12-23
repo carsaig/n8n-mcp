@@ -1,4 +1,4 @@
-# Release v2.30.2-cs.7
+# Release v2.30.2-cs.8
 
 Date: 2025-12-23
 
@@ -7,6 +7,7 @@ Date: 2025-12-23
 
 ## Changes since v2.11.3
 ```
+f19d073 chore: compose/docs bump and release notes for v2.30.2-cs.7
 9f3b17b ci: deploy to correct Coolify UUID
 4026df9 ci: fix PR checks and skip validators
 c94e877 chore: retrigger checks
@@ -463,5 +464,5 @@ b547a47 feat: add comprehensive release notes and Cloudflare proxy configuration
 7bad206 test: verify SSH commit signing works```
 
 ## Container images
-- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.8s.7
-- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.8st
+- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.8
+- ghcr.io/carsaig/n8n-mcp:latest
