@@ -1,7 +1,7 @@
 name: Required Checks
 
 on:
-  pull_request:
+  workflow_dispatch:
   push:
     branches: [ main ]
 
