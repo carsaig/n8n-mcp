@@ -38,14 +38,14 @@ services:
     labels:
       - traefik.enable=true
       - traefik.http.services.n8n-mcp.loadbalancer.server.port=3000
-      - 'traefik.http.routers.n8n-mcp-upstream.rule=Host(`${MCP_HOST}`) && PathPrefix(`/__upstream/mcp`)'
+      - 'traefik.http.routers.n8n-mcp-upstream.rule=Host(`mcp-n8n.certain.cc`) && PathPrefix(`/__upstream/mcp`)'
       - traefik.http.routers.n8n-mcp-upstream.entrypoints=https
       - traefik.http.routers.n8n-mcp-upstream.tls=true
       - traefik.http.routers.n8n-mcp-upstream.priority=20000
       - traefik.http.routers.n8n-mcp-upstream.service=n8n-mcp
       - traefik.http.routers.n8n-mcp-upstream.middlewares=n8n-mcp-strip-prefix
       - traefik.http.middlewares.n8n-mcp-strip-prefix.stripprefix.prefixes=/__upstream
-      - 'traefik.http.routers.n8n-mcp-on-n8n.rule=Host(`${SERVICE_FQDN_N8N}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`))'
+      - 'traefik.http.routers.n8n-mcp-on-n8n.rule=Host(`n8n.certain.cc`) && (Path(`/mcp`) || PathPrefix(`/mcp/`))'
       - traefik.http.routers.n8n-mcp-on-n8n.entrypoints=https
       - traefik.http.routers.n8n-mcp-on-n8n.tls=true
       - traefik.http.routers.n8n-mcp-on-n8n.priority=10000
