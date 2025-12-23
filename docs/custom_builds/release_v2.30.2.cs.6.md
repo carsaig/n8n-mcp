@@ -1,4 +1,4 @@
-# Release v2.30.2-cs.4
+# Release v2.30.2-cs.6
 
 Date: 2025-12-22
 
@@ -7,6 +7,10 @@ Date: 2025-12-22
 
 ## Changes since v2.11.3
 ```
+4ed5408 chore: retrigger checks
+7f3ca89 chore: compose/docs bump and release notes for v2.30.2-cs.5
+a39b265 chore: retrigger checks
+4aab149 chore: compose/docs bump and release notes for v2.30.2-cs.4
 8dfe7eb chore: compose/docs bump and release notes for v2.30.2-cs.2
 f63dcab chore: use latest image in Coolify compose
 5901aba ci: trigger release on main merges
@@ -455,5 +459,5 @@ b547a47 feat: add comprehensive release notes and Cloudflare proxy configuration
 7bad206 test: verify SSH commit signing works```
 
 ## Container images
-- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.6s.5s.4
-- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.6s.5st
+- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.6
+- ghcr.io/carsaig/n8n-mcp:latest
