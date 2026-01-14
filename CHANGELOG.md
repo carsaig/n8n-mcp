@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.33.2] - 2026-01-13
+
+### Changed
+
+- **Updated n8n dependencies to latest versions**
+  - n8n: 2.2.3 → 2.3.3
+  - n8n-core: 2.2.2 → 2.3.2
+  - n8n-workflow: 2.2.2 → 2.3.2
+  - @n8n/n8n-nodes-langchain: 2.2.2 → 2.3.2
+  - Rebuilt node database with 537 nodes (434 from n8n-nodes-base, 103 from @n8n/n8n-nodes-langchain)
+  - Updated README badge with new n8n version
+
+## [2.33.1] - 2026-01-12
+
+### Fixed
+
+- **Docker image version mismatch bug**: Docker images were built with stale `package.runtime.json` (v2.29.5) while npm package was at v2.33.0
+  - Root cause: `build-docker` job in `release.yml` did not sync `package.runtime.json` version before building
+  - The `publish-npm` job synced the version, but both jobs ran in parallel, so Docker got the stale version
+  - Added "Sync runtime version" step to `release.yml` `build-docker` job
+  - Added "Sync runtime version" step to `docker-build.yml` `build` and `build-railway` jobs
+  - All Docker builds now sync `package.runtime.json` version from `package.json` before building
+
 ## [2.33.0] - 2026-01-08
 
 ### Added
