@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.34.5] - 2026-02-08
+
+### Fixed
+
+- **MCP Apps: Fix blank UI and wrong status badge in Claude**: Rewrote `useToolData` hook to use the official `useApp` hook from `@modelcontextprotocol/ext-apps/react` for proper lifecycle management. Updated UI types and components to match actual server response format (`success: boolean` instead of `status: string`, nested `data` object for workflow details). Validation summary now handles both direct and wrapped (`n8n_validate_workflow`) response shapes.
+
+Conceived by Romuald Czlonkowski - https://www.aiadvisors.pl/en
+
+## [2.34.3] - 2026-02-07
+
+### Fixed
+
+- **MCP Apps: Use correct MIME type for ext-apps spec**: Changed resource MIME type from `text/html` to `text/html;profile=mcp-app` (the `RESOURCE_MIME_TYPE` constant from `@modelcontextprotocol/ext-apps`). Without this profile parameter, Claude Desktop/web fails to recognize resources as MCP Apps and shows "Failed to load MCP App: the resource may exceed the 5 MB size limit."
+
+Conceived by Romuald Czlonkowski - https://www.aiadvisors.pl/en
+
 ## [2.34.2] - 2026-02-07
 
 ### Fixed
