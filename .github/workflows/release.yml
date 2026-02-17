@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'docs/**'
+      - 'docker-compose.coolify.yml'
   workflow_dispatch:
     inputs:
       version:
@@ -33,6 +36,8 @@ concurrency:
 env:
   IMAGE_NAME: ghcr.io/carsaig/n8n-mcp
   COOLIFY_WEBHOOK_URL: https://coolify.certain.cc/api/v1/deploy?uuid=ng0woc4ks408skwcg4c4gcko&force=true
+  UPSTREAM_OWNER: czlonkowski
+  UPSTREAM_REPO: n8n-mcp
 
 jobs:
   release:
@@ -55,21 +60,9 @@ jobs:
         shell: bash
         env:
           VERSION_INPUT: ${{ inputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Helper to extract base/version and cs suffix
-          parse_cs() {
-            local tag="$1"
-            if [[ "$tag" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+)-cs\.([0-9]+)$ ]]; then
-              echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
-              return 0
-            fi
-            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "$tag 0"
-              return 0
-            fi
-            return 1
-          }
 
           # If this workflow was triggered by a tag push, respect that tag verbatim
           if [[ "${GITHUB_REF:-}" =~ ^refs/tags/ ]]; then
@@ -82,41 +75,37 @@ jobs:
             fi
             NEXT="$VERSION_INPUT"
           else
-            # Try to detect upstream base from recent merge commits created by upstream-sync
-            BASE=$(git log -n 100 --pretty=%s | grep -Eo 'sync upstream release v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+') || true
+            # Query upstream repo for the authoritative latest release tag
+            UPSTREAM_TAG=$(curl -sSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest" \
+              | jq -r '.tag_name')
 
-            # Get latest existing tag in this repo (could be with or without -cs.N)
+            if [[ -z "$UPSTREAM_TAG" || "$UPSTREAM_TAG" == "null" ]]; then
+              echo "::error::Failed to fetch upstream release tag from ${UPSTREAM_OWNER}/${UPSTREAM_REPO}"
+              exit 1
+            fi
+            echo "Upstream latest release: ${UPSTREAM_TAG}"
+
+            # Get our latest local tag
             LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)
+            echo "Latest local tag: ${LATEST:-<none>}"
 
-            if [[ -n "$BASE" ]]; then
-              # Determine highest cs.N for this BASE in existing tags
-              EXISTING=$(git tag -l "${BASE}-cs.*" --sort=-v:refname | head -n1 || true)
-              if [[ -n "$EXISTING" ]]; then
-                read -r _ CSN <<<"$(parse_cs "$EXISTING")"
-                NEXT="${BASE}-cs.$((CSN+1))"
-              else
-                # If we already tagged exactly BASE, start cs.1, else also start cs.1
-                NEXT="${BASE}-cs.1"
-              fi
+            if [[ -z "$LATEST" ]]; then
+              # First release ever — adopt upstream version
+              NEXT="$UPSTREAM_TAG"
+            elif [[ "$LATEST" == "$UPSTREAM_TAG" ]]; then
+              # We already released this exact upstream version — custom patch
+              NEXT="${UPSTREAM_TAG}-cs.1"
+            elif [[ "$LATEST" =~ ^${UPSTREAM_TAG}-cs\.([0-9]+)$ ]]; then
+              # Already have custom patches on this upstream base — increment
+              NEXT="${UPSTREAM_TAG}-cs.$(( ${BASH_REMATCH[1]} + 1 ))"
             else
-              # No upstream base detected; fall back on latest local tag logic
-              if [[ -z "$LATEST" ]]; then
-                NEXT="v0.0.1-cs.1"
-              else
-                if OUT="$(parse_cs "$LATEST")"; then
-                  read -r BASEONLY CSN <<<"$OUT"
-                  if [[ "$CSN" -gt 0 ]]; then
-                    NEXT="${BASEONLY}-cs.$((CSN+1))"
-                  else
-                    NEXT="${BASEONLY}-cs.1"
-                  fi
-                else
-                  echo "Unexpected latest tag format: $LATEST" >&2
-                  exit 1
-                fi
-              fi
+              # Latest local tag is for a different upstream version — adopt the new one
+              NEXT="$UPSTREAM_TAG"
             fi
           fi
+          echo "Resolved version: ${NEXT}"
           echo "VERSION=${NEXT}" | tee -a "$GITHUB_ENV"
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
 
@@ -227,6 +216,9 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Find previous tag for diff range
+          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${VER}$" | head -n1 || true)
+          PREV_TAG="${PREV_TAG:-HEAD~10}"
           {
             echo "# Release ${VER}"
             echo
@@ -235,9 +227,9 @@ jobs:
             echo "## Summary"
             echo "- Automated release notes generated by workflow."
             echo
-            echo "## Changes since v2.11.3"
+            echo "## Changes since ${PREV_TAG}"
             echo '```'
-            git log --pretty=format:'%h %s' --no-merges v2.11.3..HEAD || true
+            git log --pretty=format:'%h %s' --no-merges "${PREV_TAG}..HEAD" || true
             echo '```'
             echo
             echo "## Container images"
