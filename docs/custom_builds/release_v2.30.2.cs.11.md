@@ -507,5 +507,5 @@ b547a47 feat: add comprehensive release notes and Cloudflare proxy configuration
 7bad206 test: verify SSH commit signing works```
 
 ## Container images
-- ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.11
-- ghcr.io/carsaig/n8n-mcp:latest
+- ghcr.io/carsaig/n8n-mcp:v2.35.2s.11
+- ghcr.io/carsaig/n8n-mcp:v2.35.2st
