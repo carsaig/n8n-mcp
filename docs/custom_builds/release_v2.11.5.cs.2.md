@@ -21,8 +21,8 @@ This release builds on v2.11.3 with improved CI/CD, safer releases, and Coolify-
 ### 🐳 Container Publishing
 - ARM64-only image published to GHCR
 - Dual tags pushed:
-  - `ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.11s.10s.9s.8s.7s.6s.5s.4s.2s.1s.2`
-  - `ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.11s.10s.9s.8s.7s.6s.5s.4s.2s.1st`
+  - `ghcr.io/carsaig/n8n-mcp:v2.35.2s.11s.10s.9s.8s.7s.6s.5s.4s.2s.1s.2`
+  - `ghcr.io/carsaig/n8n-mcp:v2.35.2s.11s.10s.9s.8s.7s.6s.5s.4s.2s.1st`
 
 ### 🔄 Upstream/Workflow Reliability
 - Upstream sync flow: release-based detection; PAT-based pushes; protected workflows supported.
@@ -33,11 +33,11 @@ This release builds on v2.11.3 with improved CI/CD, safer releases, and Coolify-
 
 ### Docker
 ```
-docker pull ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.11s.10s.9s.8s.7s.6s.5s.4s.2s.1s.2
+docker pull ghcr.io/carsaig/n8n-mcp:v2.35.2s.11s.10s.9s.8s.7s.6s.5s.4s.2s.1s.2
 ```
 
 ## 🔗 Container Registry
-- GHCR: `ghcr.io/carsaig/n8n-mcp:v2.30.2-cs.11s.10s.9s.8s.7s.6s.5s.4s.2s.1s.2`
+- GHCR: `ghcr.io/carsaig/n8n-mcp:v2.35.2s.11s.10s.9s.8s.7s.6s.5s.4s.2s.1s.2`
 - `latest` also available for Coolify restart workflows
 - Architecture: ARM64
 
