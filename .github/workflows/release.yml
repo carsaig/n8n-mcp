@@ -35,7 +35,7 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/carsaig/n8n-mcp
-  COOLIFY_WEBHOOK_URL: https://coolify.certain.cc/api/v1/deploy?uuid=ng0woc4ks408skwcg4c4gcko&force=true
+  COOLIFY_WEBHOOK_URL: https://coolify.certain.cc/api/v1/deploy?uuid=z8s00c0kgo0s8848400c88kw&force=true
   UPSTREAM_OWNER: czlonkowski
   UPSTREAM_REPO: n8n-mcp
 
@@ -48,6 +48,7 @@ jobs:
 
     outputs:
       version: ${{ steps.version.outputs.version }}
+      is_custom: ${{ steps.version.outputs.is_custom }}
 
     steps:
       - name: Checkout
@@ -60,7 +61,6 @@ jobs:
         shell: bash
         env:
           VERSION_INPUT: ${{ inputs.version }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -76,7 +76,8 @@ jobs:
             NEXT="$VERSION_INPUT"
           else
             # Query upstream repo for the authoritative latest release tag
-            UPSTREAM_TAG=$(curl -sSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            # No auth header — public repo, and GITHUB_TOKEN is scoped to this repo only
+            UPSTREAM_TAG=$(curl -sSL \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest" \
               | jq -r '.tag_name')
@@ -105,9 +106,16 @@ jobs:
               NEXT="$UPSTREAM_TAG"
             fi
           fi
-          echo "Resolved version: ${NEXT}"
+          # Determine if this is a custom build (has -cs. suffix)
+          if [[ "$NEXT" == *-cs.* ]]; then
+            IS_CUSTOM=true
+          else
+            IS_CUSTOM=false
+          fi
+          echo "Resolved version: ${NEXT} (custom_build=${IS_CUSTOM})"
           echo "VERSION=${NEXT}" | tee -a "$GITHUB_ENV"
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "is_custom=${IS_CUSTOM}" >> "$GITHUB_OUTPUT"
 
 
       - name: Set up Docker Buildx
@@ -121,7 +129,21 @@ jobs:
           password: ${{ secrets.GHCR_PAT }}
 
 
-      - name: Build and push (ARM64 only)
+      - name: Re-tag upstream image (no custom changes)
+        if: steps.version.outputs.is_custom == 'false'
+        run: |
+          set -euo pipefail
+          # Upstream uses tags without 'v' prefix (e.g. 2.35.2)
+          UPSTREAM_DOCKER_TAG="${VERSION#v}"
+          UPSTREAM_IMAGE="ghcr.io/${UPSTREAM_OWNER}/${UPSTREAM_REPO}:${UPSTREAM_DOCKER_TAG}"
+          echo "Re-tagging upstream image ${UPSTREAM_IMAGE} → ${IMAGE_NAME}:${VERSION}"
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:${VERSION}" \
+            --tag "${IMAGE_NAME}:latest" \
+            "${UPSTREAM_IMAGE}"
+
+      - name: Build and push (ARM64 — custom changes only)
+        if: steps.version.outputs.is_custom == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -131,14 +153,10 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
 
-      - name: Mark build complete
-        id: build_complete
-        run: echo "built=true" >> "$GITHUB_OUTPUT"
-
-      - name: Echo built image tag
+      - name: Echo image tag
         run: |
-          echo "Image: ${IMAGE_NAME}"
-          echo "Version: ${VERSION}"
+          echo "Image: ${IMAGE_NAME}:${VERSION}"
+          echo "Custom build: ${{ steps.version.outputs.is_custom }}"
 
   release_and_deploy:
     runs-on: ubuntu-latest
