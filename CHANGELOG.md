@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.36.1] - 2026-03-08
+
+### Added
+
+- **Conditional branch fan-out detection** (`CONDITIONAL_BRANCH_FANOUT`): Warns when IF, Filter, or Switch nodes have all connections crammed into `main[0]` with higher-index outputs empty, which usually means all target nodes execute together on one branch while other branches have no effect
+  - Detects IF nodes with both true/false targets on `main[0]`
+  - Detects Filter nodes with both matched/unmatched targets on `main[0]`
+  - Detects Switch nodes with all targets on output 0 and other outputs unused
+  - Skips warning when fan-out is legitimate (higher outputs also have connections)
+  - Skips warning for single connections (intentional true-only/matched-only usage)
+
+### Changed
+
+- **Refactored output index validation**: Extracted `getShortNodeType()` and `getConditionalOutputInfo()` helpers to eliminate duplicated conditional node detection logic between `validateOutputIndexBounds` and the new `validateConditionalBranchUsage`
+
+Conceived by Romuald Czlonkowski - https://www.aiadvisors.pl/en
+
+## [2.36.0] - 2026-03-07
+
+### Added
+
+- **Connection validation: detect broken/malformed workflow connections** (Issue #620):
+  - Unknown output keys (`UNKNOWN_CONNECTION_KEY`): Flags invalid connection keys like `"0"`, `"1"`, `"output"` with fix suggestions (e.g., "use main[1] instead" for numeric keys)
+  - Invalid type field (`INVALID_CONNECTION_TYPE`): Detects invalid `type` values in connection targets (e.g., `"0"` instead of `"main"`)
+  - Output index bounds checking (`OUTPUT_INDEX_OUT_OF_BOUNDS`): Catches connections using output indices beyond what a node supports, with awareness of `onError: 'continueErrorOutput'`, Switch rules, and IF/Filter nodes
+  - Input index bounds checking (`INPUT_INDEX_OUT_OF_BOUNDS`): Validates target input indices against known node input counts (Merge=2, triggers=0, others=1)
+  - BFS-based trigger reachability analysis: Replaces simple orphan detection with proper graph traversal from trigger nodes, flagging unreachable subgraphs
+  - Flexible `WorkflowConnection` interface: Changed from explicit `main?/error?/ai_tool?` to `[outputType: string]` for accurate validation of all connection types
+
+Conceived by Romuald Czlonkowski - https://www.aiadvisors.pl/en
+
 ## [2.35.6] - 2026-03-04
 
 ### Changed
