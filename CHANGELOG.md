@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.37.2] - 2026-03-15
+
+### Fixed
+
+- **Code validator `$()` false positive** (Issue #294): `$('Previous Node').first().json` no longer triggers "Invalid $ usage detected" warning. Added `(` and `_` to the regex negative lookahead to support standard n8n cross-node references and valid JS identifiers like `$_var`
+- **Code validator helper function return false positive** (Issue #293): `function isValid(item) { return false; }` no longer triggers "Cannot return primitive values directly" error. Added helper function detection to skip primitive return checks when named functions or arrow function assignments are present
+- **Null property removal in diff engine** (Issue #611): `{continueOnFail: null}` no longer causes Zod validation error "Expected boolean, received null". The diff engine now treats `null` values as property deletion (`delete` operator), and documentation updated from `undefined` to `null` for property removal
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.37.1] - 2026-03-14
+
+### Fixed
+
+- **Numeric sourceOutput remapping** (Issue #537): `addConnection` with numeric `sourceOutput` values like `"0"` or `"1"` now correctly maps to `"main"` with the corresponding `sourceIndex`, preventing malformed connection keys
+- **IMAP Email Trigger activation** (Issue #538): `n8n-nodes-base.emailReadImap` and other IMAP-based polling triggers are now recognized as activatable triggers, allowing workflow activation
+- **AI tool description false positives** (Issue #477): Validators now check `description` and `options.description` in addition to `toolDescription`, fixing false `MISSING_TOOL_DESCRIPTION` errors for toolWorkflow, toolCode, and toolSerpApi nodes
+- **n8n_create_workflow undefined ID** (Issue #602): Added defensive check for missing workflow ID in API response with actionable error message
+- **Flaky CI performance test**: Relaxed bulk insert ratio threshold from 15 to 20 to accommodate CI runner variability
+
+Conceived by Romuald Czlonkowski - https://www.aiadvisors.pl/en
+
+## [2.37.0] - 2026-03-14
+
+### Fixed
+
+- **Unary operator sanitization** (Issue #592): Added missing `empty`, `notEmpty`, `exists`, `notExists` operators to the sanitizer's unary operator list, preventing IF/Switch node corruption during partial updates
+- **Positional connection array preservation** (Issue #610): `removeNode` and `cleanStaleConnections` now trim only trailing empty arrays, preserving intermediate positional indices for IF/Switch multi-output nodes
+- **Scoped sanitization**: Auto-sanitization now only runs on nodes that were actually added or updated, preventing unrelated nodes (e.g., HTTP Request parameters) from being silently modified
+- **Activate/deactivate 415 errors** (Issue #633): Added empty body `{}` to POST calls for workflow activation/deactivation endpoints
+- **Zod error readability** (Issue #630): Validation errors now return human-readable `"path: message"` strings instead of raw Zod error objects
+- **updateNode error hints** (Issue #623): Improved error message when `updates` parameter is missing, showing correct structure with `nodeId`/`nodeName` and `updates` fields
+- **removeConnection after removeNode** (Issue #624): When a node was already removed by a prior `removeNode` operation, the error message now explains that connections were automatically cleaned up
+- **Connection type coercion** (Issue #629): `sourceOutput` and `targetInput` are now coerced to strings, handling numeric values (0, 1) passed by MCP clients
+
+### Added
+
+- **`saved` field in responses** (Issue #625): All `n8n_update_partial_workflow` responses now include `saved: true/false` to distinguish whether the workflow was persisted to n8n
+- **Tag operations via dedicated API** (Issue #599): `addTag`/`removeTag` now use the n8n tag API (`PUT /workflows/{id}/tags`) instead of embedding tags in the workflow body, fixing silent tag failures. Includes automatic tag creation, case-insensitive name resolution, and last-operation-wins reconciliation for conflicting add/remove
+- **`updateWorkflowTags` API client method**: New method on `N8nApiClient` for managing workflow tag associations via the dedicated endpoint
+- **`operationsApplied` in top-level response**: Promoted from nested `details` to top-level for easier consumption by MCP clients
+
+Conceived by Romuald Czlonkowski - https://www.aiadvisors.pl/en
+
+## [2.36.2] - 2026-03-14
+
+### Changed
+
+- **Updated n8n dependencies**: n8n 2.10.3 → 2.11.4, n8n-core 2.10.1 → 2.11.1, n8n-workflow 2.10.1 → 2.11.1, @n8n/n8n-nodes-langchain 2.10.1 → 2.11.2
+- **Updated @modelcontextprotocol/sdk**: 1.20.1 → 1.27.1 (fixes critical cross-client data leak vulnerability CVE GHSA-345p-7cg4-v4c7)
+- Rebuilt node database with 1,239 nodes (809 core + 430 community preserved)
+- Updated README badge with new n8n version and node counts
+
+Conceived by Romuald Czlonkowski - https://www.aiadvisors.pl/en
+
 ## [2.36.1] - 2026-03-08
 
 ### Added
