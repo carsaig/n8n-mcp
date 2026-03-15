@@ -424,7 +424,7 @@ describe('WorkflowDiffEngine', () => {
 
       expect(result.success).toBe(false);
       expect(result.errors![0].message).toContain('Missing required parameter \'updates\'');
-      expect(result.errors![0].message).toContain('Example:');
+      expect(result.errors![0].message).toContain('Correct structure:');
     });
   });
 
@@ -1898,16 +1898,15 @@ describe('WorkflowDiffEngine', () => {
       };
 
       const result = await diffEngine.applyDiff(baseWorkflow, request);
-      
+
       expect(result.success).toBe(true);
-      expect(result.workflow!.tags).toContain('production');
-      expect(result.workflow!.tags).toHaveLength(3);
+      expect(result.tagsToAdd).toContain('production');
     });
 
     it('should not add duplicate tags', async () => {
       const operation: AddTagOperation = {
         type: 'addTag',
-        tag: 'test' // Already exists
+        tag: 'test' // Already exists in workflow but tagsToAdd tracks it for API
       };
 
       const request: WorkflowDiffRequest = {
@@ -1916,9 +1915,10 @@ describe('WorkflowDiffEngine', () => {
       };
 
       const result = await diffEngine.applyDiff(baseWorkflow, request);
-      
+
       expect(result.success).toBe(true);
-      expect(result.workflow!.tags).toHaveLength(2); // No change
+      // Tags are now tracked for dedicated API call, not modified on workflow
+      expect(result.tagsToAdd).toEqual(['test']);
     });
 
     it('should create tags array if not exists', async () => {
@@ -1935,10 +1935,9 @@ describe('WorkflowDiffEngine', () => {
       };
 
       const result = await diffEngine.applyDiff(baseWorkflow, request);
-      
+
       expect(result.success).toBe(true);
-      expect(result.workflow!.tags).toBeDefined();
-      expect(result.workflow!.tags).toEqual(['new-tag']);
+      expect(result.tagsToAdd).toEqual(['new-tag']);
     });
 
     it('should remove an existing tag', async () => {
@@ -1953,10 +1952,9 @@ describe('WorkflowDiffEngine', () => {
       };
 
       const result = await diffEngine.applyDiff(baseWorkflow, request);
-      
+
       expect(result.success).toBe(true);
-      expect(result.workflow!.tags).not.toContain('test');
-      expect(result.workflow!.tags).toHaveLength(1);
+      expect(result.tagsToRemove).toContain('test');
     });
 
     it('should handle removing non-existent tag gracefully', async () => {
@@ -1971,9 +1969,11 @@ describe('WorkflowDiffEngine', () => {
       };
 
       const result = await diffEngine.applyDiff(baseWorkflow, request);
-      
+
       expect(result.success).toBe(true);
-      expect(result.workflow!.tags).toHaveLength(2); // No change
+      expect(result.tagsToRemove).toEqual(['non-existent']);
+      // workflow.tags unchanged since tags are now handled via dedicated API
+      expect(result.workflow!.tags).toHaveLength(2);
     });
   });
 
@@ -2509,7 +2509,7 @@ describe('WorkflowDiffEngine', () => {
         expect(result.failed).toEqual([1]); // Operation 1 failed
         expect(result.errors).toHaveLength(1);
         expect(result.workflow.name).toBe('New Workflow Name');
-        expect(result.workflow.tags).toContain('production');
+        expect(result.tagsToAdd).toContain('production');
       });
 
       it('should return success false if all operations fail in continueOnError mode', async () => {
@@ -3356,7 +3356,7 @@ describe('WorkflowDiffEngine', () => {
         expect(result.failed).toContain(1); // replaceConnections with invalid node
         expect(result.applied).toContain(2); // removeConnection with ignoreErrors
         expect(result.applied).toContain(3); // addTag
-        expect(result.workflow.tags).toContain('final-tag');
+        expect(result.tagsToAdd).toContain('final-tag');
       });
     });
 
@@ -4610,7 +4610,7 @@ describe('WorkflowDiffEngine', () => {
       expect(result.success).toBe(true);
       expect(result.operationsApplied).toBe(3);
       expect(result.workflow!.name).toBe('Updated Workflow Name');
-      expect(result.workflow!.tags).toContain('production');
+      expect(result.tagsToAdd).toContain('production');
       expect(result.shouldActivate).toBe(true);
     });
 
@@ -4880,6 +4880,113 @@ describe('WorkflowDiffEngine', () => {
 
       expect(result.success).toBe(true);
       expect(result.workflow.connections['Source Node']['main'][0][0].type).toBe('main');
+    });
+  });
+
+  describe('null value property deletion', () => {
+    it('should delete a property when value is null', async () => {
+      const node = baseWorkflow.nodes.find((n: any) => n.name === 'HTTP Request')!;
+      (node as any).continueOnFail = true;
+
+      const operation: UpdateNodeOperation = {
+        type: 'updateNode',
+        nodeName: 'HTTP Request',
+        updates: { continueOnFail: null }
+      };
+
+      const request: WorkflowDiffRequest = {
+        id: 'test-workflow',
+        operations: [operation]
+      };
+
+      const result = await diffEngine.applyDiff(baseWorkflow, request);
+
+      expect(result.success).toBe(true);
+      const updatedNode = result.workflow.nodes.find((n: any) => n.name === 'HTTP Request')!;
+      expect('continueOnFail' in updatedNode).toBe(false);
+    });
+
+    it('should delete a nested property when value is null', async () => {
+      const node = baseWorkflow.nodes.find((n: any) => n.name === 'HTTP Request')!;
+      (node as any).parameters = { url: 'https://example.com', authentication: 'basic' };
+
+      const operation: UpdateNodeOperation = {
+        type: 'updateNode',
+        nodeName: 'HTTP Request',
+        updates: { 'parameters.authentication': null }
+      };
+
+      const request: WorkflowDiffRequest = {
+        id: 'test-workflow',
+        operations: [operation]
+      };
+
+      const result = await diffEngine.applyDiff(baseWorkflow, request);
+
+      expect(result.success).toBe(true);
+      const updatedNode = result.workflow.nodes.find((n: any) => n.name === 'HTTP Request')!;
+      expect((updatedNode as any).parameters.url).toBe('https://example.com');
+      expect('authentication' in (updatedNode as any).parameters).toBe(false);
+    });
+
+    it('should set property normally when value is not null', async () => {
+      const operation: UpdateNodeOperation = {
+        type: 'updateNode',
+        nodeName: 'HTTP Request',
+        updates: { continueOnFail: true }
+      };
+
+      const request: WorkflowDiffRequest = {
+        id: 'test-workflow',
+        operations: [operation]
+      };
+
+      const result = await diffEngine.applyDiff(baseWorkflow, request);
+
+      expect(result.success).toBe(true);
+      const updatedNode = result.workflow.nodes.find((n: any) => n.name === 'HTTP Request')!;
+      expect((updatedNode as any).continueOnFail).toBe(true);
+    });
+
+    it('should be a no-op when deleting a non-existent property', async () => {
+      const node = baseWorkflow.nodes.find((n: any) => n.name === 'HTTP Request')!;
+      const originalKeys = Object.keys(node).sort();
+
+      const operation: UpdateNodeOperation = {
+        type: 'updateNode',
+        nodeName: 'HTTP Request',
+        updates: { nonExistentProp: null }
+      };
+
+      const request: WorkflowDiffRequest = {
+        id: 'test-workflow',
+        operations: [operation]
+      };
+
+      const result = await diffEngine.applyDiff(baseWorkflow, request);
+
+      expect(result.success).toBe(true);
+      const updatedNode = result.workflow.nodes.find((n: any) => n.name === 'HTTP Request')!;
+      expect('nonExistentProp' in updatedNode).toBe(false);
+    });
+
+    it('should skip intermediate object creation when deleting from non-existent parent path', async () => {
+      const operation: UpdateNodeOperation = {
+        type: 'updateNode',
+        nodeName: 'HTTP Request',
+        updates: { 'nonExistent.deeply.nested.prop': null }
+      };
+
+      const request: WorkflowDiffRequest = {
+        id: 'test-workflow',
+        operations: [operation]
+      };
+
+      const result = await diffEngine.applyDiff(baseWorkflow, request);
+
+      expect(result.success).toBe(true);
+      const updatedNode = result.workflow.nodes.find((n: any) => n.name === 'HTTP Request')!;
+      expect('nonExistent' in updatedNode).toBe(false);
     });
   });
 });
