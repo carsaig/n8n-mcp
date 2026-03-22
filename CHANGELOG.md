@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.40.1] - 2026-03-21
+
+### Fixed
+
+- **`n8n_manage_datatable` row operations broken by MCP transport serialization**: `data` parameter received as string instead of JSON — added `z.preprocess` coercers for array/object/filter params
+- **`n8n_manage_datatable` filter/sortBy URL encoding**: n8n API requires URL-encoded query params — added `encodeURIComponent()` for filter and sortBy in getRows and deleteRows
+- **`json` column type rejected by n8n API**: Removed `json` from column type enum (n8n only accepts string/number/boolean/date)
+- **Garbled 404 error messages**: Fixed `N8nNotFoundError` constructor — API error messages are now passed through cleanly instead of being wrapped in "Resource with ID ... not found"
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.40.0] - 2026-03-21
+
+### Changed
+
+- **`n8n_manage_datatable` MCP tool** (replaces `n8n_create_data_table`): Full data table management covering all 10 n8n data table API endpoints
+  - **Table operations**: createTable, listTables, getTable, updateTable, deleteTable
+  - **Row operations**: getRows, insertRows, updateRows, upsertRows, deleteRows
+  - Filter system with and/or logic and 8 condition operators (eq, neq, like, ilike, gt, gte, lt, lte)
+  - Dry-run support for updateRows, upsertRows, deleteRows
+  - Pagination, sorting, and full-text search for row listing
+  - Shared error handler and consolidated Zod schemas for consistency
+  - 9 new `N8nApiClient` methods for all data table endpoints
+- **`projectId` parameter for `n8n_create_workflow`**: Create workflows directly in a specific team project (enterprise feature)
+
+### Breaking
+
+- `n8n_create_data_table` tool replaced by `n8n_manage_datatable` with `action: "createTable"`
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.38.0] - 2026-03-20
+
+### Added
+
+- **`transferWorkflow` diff operation** (Issue #644): Move workflows between projects via `n8n_update_partial_workflow`
+  - New `transferWorkflow` operation type with `destinationProjectId` parameter
+  - Calls `PUT /workflows/{id}/transfer` via dedicated API after workflow update
+  - Proper error handling: returns `{ success: false, saved: true }` when transfer fails after update
+  - Transfer executes before activation so workflow is in target project first
+  - Zod schema validates `destinationProjectId` is non-empty
+  - Updated tool description and documentation to list the new operation
+  - `inferIntentFromOperations` returns descriptive intent for transfer operations
+  - `N8nApiClient.transferWorkflow()` method added
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.37.4] - 2026-03-18
 
 ### Changed

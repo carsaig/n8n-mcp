@@ -100,6 +100,16 @@ describe('handlers-n8n-manager', () => {
       listExecutions: vi.fn(),
       deleteExecution: vi.fn(),
       healthCheck: vi.fn(),
+      createDataTable: vi.fn(),
+      listDataTables: vi.fn(),
+      getDataTable: vi.fn(),
+      updateDataTable: vi.fn(),
+      deleteDataTable: vi.fn(),
+      getDataTableRows: vi.fn(),
+      insertDataTableRows: vi.fn(),
+      updateDataTableRows: vi.fn(),
+      upsertDataTableRow: vi.fn(),
+      deleteDataTableRows: vi.fn(),
     };
 
     // Setup mock repository
@@ -631,6 +641,27 @@ describe('handlers-n8n-manager', () => {
         expect(result.details.errors[0]).toContain('Webhook');
       });
     });
+
+    it('should pass projectId to API when provided', async () => {
+      const testWorkflow = createTestWorkflow();
+      const input = {
+        name: 'Test Workflow',
+        nodes: testWorkflow.nodes,
+        connections: testWorkflow.connections,
+        projectId: 'project-abc-123',
+      };
+
+      mockApiClient.createWorkflow.mockResolvedValue(testWorkflow);
+
+      const result = await handlers.handleCreateWorkflow(input);
+
+      expect(result.success).toBe(true);
+      expect(mockApiClient.createWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 'project-abc-123',
+        })
+      );
+    });
   });
 
   describe('handleGetWorkflow', () => {
@@ -1081,10 +1112,10 @@ describe('handlers-n8n-manager', () => {
             enabled: true,
           },
           managementTools: {
-            count: 13,
+            count: 14,
             enabled: true,
           },
-          totalAvailable: 20,
+          totalAvailable: 21,
         },
       });
 
