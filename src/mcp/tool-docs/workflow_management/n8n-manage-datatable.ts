@@ -9,12 +9,12 @@ export const n8nManageDatatableDoc: ToolDocumentation = {
     example: 'n8n_manage_datatable({action: "createTable", name: "Contacts", columns: [{name: "email", type: "string"}]})',
     performance: 'Fast (100-500ms)',
     tips: [
-      'Table actions: createTable, listTables, getTable, updateTable, deleteTable',
+      'Table actions: createTable, listTables, getTable, updateTable (rename only), deleteTable',
       'Row actions: getRows, insertRows, updateRows, upsertRows, deleteRows',
       'Use dryRun: true to preview update/upsert/delete before applying',
       'Filter supports: eq, neq, like, ilike, gt, gte, lt, lte conditions',
       'Use returnData: true to get affected rows back from update/upsert/delete',
-      'Requires n8n enterprise or cloud with data tables feature'
+      'Requires N8N_API_URL and N8N_API_KEY configured'
     ]
   },
   full: {
@@ -22,7 +22,7 @@ export const n8nManageDatatableDoc: ToolDocumentation = {
 - **createTable**: Create a new data table with optional typed columns
 - **listTables**: List all data tables (paginated)
 - **getTable**: Get table details and column definitions by ID
-- **updateTable**: Rename an existing table
+- **updateTable**: Rename an existing table (name only — column modifications not supported via API)
 - **deleteTable**: Permanently delete a table and all its rows
 
 **Row Actions:**
@@ -96,8 +96,6 @@ export const n8nManageDatatableDoc: ToolDocumentation = {
       'Use sortBy for deterministic row ordering',
     ],
     pitfalls: [
-      'Requires N8N_API_URL and N8N_API_KEY configured',
-      'Feature only available on n8n enterprise or cloud plans',
       'deleteTable permanently deletes all rows — cannot be undone',
       'deleteRows requires a filter — cannot delete all rows without one',
       'Column types cannot be changed after table creation via API',

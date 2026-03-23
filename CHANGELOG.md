@@ -7,12 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.40.5] - 2026-03-22
+
+### Fixed
+
+- **Webhook workflows created via MCP get 404 errors** (Issue #643): Auto-inject `webhookId` (UUID) on webhook-type nodes (`webhook`, `webhookTrigger`, `formTrigger`, `chatTrigger`) during `cleanWorkflowForCreate()` and `cleanWorkflowForUpdate()`. n8n 2.10+ requires this field for proper webhook URL registration; without it, webhooks silently fail with 404. Existing `webhookId` values are preserved.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.40.4] - 2026-03-22
+
+### Fixed
+
+- **Incorrect data tables availability info**: Removed "enterprise/cloud only" restriction from tool description and documentation — data tables are available on all n8n plans including self-hosted
+- **Redundant pitfalls removed**: Removed "Requires N8N_API_URL and N8N_API_KEY" and "enterprise or cloud plans" pitfalls — the first is implicit for all n8n management tools, the second was incorrect
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.40.3] - 2026-03-22
+
+### Fixed
+
+- **Notification 400 disconnect storms (#654)**: `handleRequest()` now returns 202 Accepted for JSON-RPC notifications with stale/expired session IDs instead of 400. Per JSON-RPC 2.0 spec, notifications don't expect responses — returning 400 caused Claude's proxy to trigger reconnection storms (930 errors/day, 216 users affected)
+- **TOCTOU race in session lookup**: Added null guard after transport assignment to handle sessions removed between the existence check and use
+- **`updateTable` silently ignoring `columns` parameter**: Now returns a warning message when `columns` is passed to `updateTable`, clarifying that table schema is immutable after creation via the public API
+- **Tool schema descriptions clarified**: `name` and `columns` parameter descriptions now explicitly document that `updateTable` is rename-only and columns are for `createTable` only
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.40.2] - 2026-03-22
+
+### Fixed
+
+- **Double URL-encoding of `filter` and `sortBy` in `getRows`/`deleteRows`**: Moved `encodeURIComponent()` from handler layer to a custom `paramsSerializer` in the API client. Handlers were encoding values before passing them as Axios params, causing double-encoding (`%257B` instead of `%7B`). Handlers now pass raw values; the API client encodes once via `serializeDataTableParams()`
+- **`updateTable` documentation clarified**: Explicitly notes that only renaming is supported (no column modifications via public API)
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.40.1] - 2026-03-21
 
 ### Fixed
 
 - **`n8n_manage_datatable` row operations broken by MCP transport serialization**: `data` parameter received as string instead of JSON — added `z.preprocess` coercers for array/object/filter params
-- **`n8n_manage_datatable` filter/sortBy URL encoding**: n8n API requires URL-encoded query params — added `encodeURIComponent()` for filter and sortBy in getRows and deleteRows
+- **`n8n_manage_datatable` filter/sortBy URL encoding**: n8n API requires URL-encoded query params — added `encodeURIComponent()` for filter and sortBy in getRows and deleteRows (revised in 2.40.2 to move encoding to API client layer)
 - **`json` column type rejected by n8n API**: Removed `json` from column type enum (n8n only accepts string/number/boolean/date)
 - **Garbled 404 error messages**: Fixed `N8nNotFoundError` constructor — API error messages are now passed through cleanly instead of being wrapped in "Resource with ID ... not found"
 
