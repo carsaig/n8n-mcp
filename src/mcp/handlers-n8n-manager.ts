@@ -2834,10 +2834,13 @@ export async function handleUpdateTable(args: unknown, context?: InstanceContext
     const client = ensureApiConfigured(context);
     const { tableId, name } = updateTableSchema.parse(args);
     const dataTable = await client.updateDataTable(tableId, { name });
+    const rawArgs = args as Record<string, unknown>;
+    const hasColumns = rawArgs && typeof rawArgs === 'object' && 'columns' in rawArgs;
     return {
       success: true,
       data: dataTable,
-      message: `Data table renamed to "${dataTable.name}"`,
+      message: `Data table renamed to "${dataTable.name}"` +
+        (hasColumns ? '. Note: columns parameter was ignored — table schema is immutable after creation via the public API' : ''),
     };
   } catch (error) {
     return handleDataTableError(error);
@@ -2861,11 +2864,10 @@ export async function handleGetRows(args: unknown, context?: InstanceContext): P
     const { tableId, filter, sortBy, ...params } = getRowsSchema.parse(args);
     const queryParams: Record<string, unknown> = { ...params };
     if (filter) {
-      const filterStr = typeof filter === 'string' ? filter : JSON.stringify(filter);
-      queryParams.filter = encodeURIComponent(filterStr);
+      queryParams.filter = typeof filter === 'string' ? filter : JSON.stringify(filter);
     }
     if (sortBy) {
-      queryParams.sortBy = encodeURIComponent(sortBy);
+      queryParams.sortBy = sortBy;
     }
     const result = await client.getDataTableRows(tableId, queryParams as any);
     return {
@@ -2931,7 +2933,7 @@ export async function handleDeleteRows(args: unknown, context?: InstanceContext)
     const client = ensureApiConfigured(context);
     const { tableId, filter, ...params } = deleteRowsSchema.parse(args);
     const queryParams = {
-      filter: encodeURIComponent(JSON.stringify(filter)),
+      filter: JSON.stringify(filter),
       ...params,
     };
     const result = await client.deleteDataTableRows(tableId, queryParams as any);

@@ -363,6 +363,22 @@ describe('Data Table Handlers (n8n_manage_datatable)', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('Update failed');
     });
+
+    it('should warn when columns parameter is passed', async () => {
+      const updatedTable = { id: 'dt-1', name: 'Renamed' };
+      mockApiClient.updateDataTable.mockResolvedValue(updatedTable);
+
+      const result = await handlers.handleUpdateTable({
+        tableId: 'dt-1',
+        name: 'Renamed',
+        columns: [{ name: 'phone', type: 'string' }],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('columns parameter was ignored');
+      expect(result.message).toContain('immutable after creation');
+      expect(mockApiClient.updateDataTable).toHaveBeenCalledWith('dt-1', { name: 'Renamed' });
+    });
   });
 
   // ========================================================================
@@ -429,12 +445,12 @@ describe('Data Table Handlers (n8n_manage_datatable)', () => {
 
       expect(mockApiClient.getDataTableRows).toHaveBeenCalledWith('dt-1', {
         limit: 50,
-        sortBy: encodeURIComponent('name:asc'),
+        sortBy: 'name:asc',
         search: 'john',
       });
     });
 
-    it('should serialize object filter to URL-encoded JSON string', async () => {
+    it('should serialize object filter to JSON string', async () => {
       mockApiClient.getDataTableRows.mockResolvedValue({ data: [], nextCursor: null });
 
       const objectFilter = {
@@ -448,11 +464,11 @@ describe('Data Table Handlers (n8n_manage_datatable)', () => {
       });
 
       expect(mockApiClient.getDataTableRows).toHaveBeenCalledWith('dt-1', {
-        filter: encodeURIComponent(JSON.stringify(objectFilter)),
+        filter: JSON.stringify(objectFilter),
       });
     });
 
-    it('should URL-encode string filter', async () => {
+    it('should pass string filter as-is', async () => {
       mockApiClient.getDataTableRows.mockResolvedValue({ data: [], nextCursor: null });
 
       const filterStr = '{"type":"and","filters":[]}';
@@ -462,7 +478,7 @@ describe('Data Table Handlers (n8n_manage_datatable)', () => {
       });
 
       expect(mockApiClient.getDataTableRows).toHaveBeenCalledWith('dt-1', {
-        filter: encodeURIComponent(filterStr),
+        filter: filterStr,
       });
     });
   });
@@ -681,11 +697,11 @@ describe('Data Table Handlers (n8n_manage_datatable)', () => {
         message: 'Rows deleted successfully',
       });
       expect(mockApiClient.deleteDataTableRows).toHaveBeenCalledWith('dt-1', {
-        filter: encodeURIComponent(JSON.stringify({ type: 'and', ...filter })),
+        filter: JSON.stringify({ type: 'and', ...filter }),
       });
     });
 
-    it('should URL-encode serialized filter for API call', async () => {
+    it('should serialize filter to JSON string for API call', async () => {
       mockApiClient.deleteDataTableRows.mockResolvedValue({ deletedCount: 1 });
 
       const filter = {
@@ -699,7 +715,7 @@ describe('Data Table Handlers (n8n_manage_datatable)', () => {
       await handlers.handleDeleteRows({ tableId: 'dt-1', filter });
 
       expect(mockApiClient.deleteDataTableRows).toHaveBeenCalledWith('dt-1', {
-        filter: encodeURIComponent(JSON.stringify(filter)),
+        filter: JSON.stringify(filter),
       });
     });
 
@@ -720,7 +736,7 @@ describe('Data Table Handlers (n8n_manage_datatable)', () => {
       expect(result.success).toBe(true);
       expect(result.message).toBe('Dry run: rows matched for deletion (no changes applied)');
       expect(mockApiClient.deleteDataTableRows).toHaveBeenCalledWith('dt-1', {
-        filter: encodeURIComponent(JSON.stringify({ type: 'and', ...filter })),
+        filter: JSON.stringify({ type: 'and', ...filter }),
         dryRun: true,
       });
     });
