@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { McpToolResponse } from '../types/n8n-api';
 import { WorkflowDiffRequest, WorkflowDiffOperation, WorkflowDiffValidationError } from '../types/workflow-diff';
 import { WorkflowDiffEngine } from '../services/workflow-diff-engine';
-import { getN8nApiClient } from './handlers-n8n-manager';
+import { getN8nApiClient, tryParseJson } from './handlers-n8n-manager';
 import { N8nApiError, getUserFriendlyErrorMessage } from '../utils/n8n-errors';
 import { logger } from '../utils/logger';
 import { InstanceContext } from '../types/instance-context';
@@ -39,7 +39,7 @@ const NODE_TARGETING_OPERATIONS = new Set([
 // Zod schema for the diff request
 const workflowDiffSchema = z.object({
   id: z.string(),
-  operations: z.array(z.object({
+  operations: z.preprocess(tryParseJson, z.array(z.object({
     type: z.string(),
     description: z.string().optional(),
     // Node operations
@@ -87,7 +87,7 @@ const workflowDiffSchema = z.object({
       }
     }
     return op;
-  })),
+  }))),
   validateOnly: z.boolean().optional(),
   continueOnError: z.boolean().optional(),
   createBackup: z.boolean().optional(),
@@ -259,9 +259,9 @@ export async function handleUpdatePartialWorkflow(
         // Build recovery guidance based on error types
         const recoverySteps = [];
         if (errorTypes.has('operator_issues')) {
-          recoverySteps.push('Operator structure issue detected. Use validate_node_operation to check specific nodes.');
+          recoverySteps.push('Operator structure issue detected. Use validate_node to check specific nodes.');
           recoverySteps.push('Binary operators (equals, contains, greaterThan, etc.) must NOT have singleValue:true');
-          recoverySteps.push('Unary operators (isEmpty, isNotEmpty, true, false) REQUIRE singleValue:true');
+          recoverySteps.push('Unary operators (empty, notEmpty, true, false) REQUIRE singleValue:true');
         }
         if (errorTypes.has('connection_issues')) {
           recoverySteps.push('Connection validation failed. Check all node connections reference existing nodes.');
