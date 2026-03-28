@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.41.3] - 2026-03-27
+
+### Fixed
+
+- **Session timeout default too low** (Issue #626): Raised `SESSION_TIMEOUT_MINUTES` default from 5 to 30 minutes. The 5-minute default caused sessions to expire mid-operation during complex multi-step workflows (validate → get structure → patch → validate), forcing users to retry. Configurable via environment variable.
+
+- **Operations array received as string from VS Code** (Issue #600): Added `z.preprocess` JSON string parsing to the `operations` parameter in `n8n_update_partial_workflow`. The VS Code MCP extension serializes arrays as JSON strings — the Zod schema now transparently parses them before validation.
+
+- **`undefined` values rejected in MCP tool calls from VS Code** (Issue #611): Strip explicit `undefined` values from tool arguments before Zod validation. VS Code sends `undefined` as a value which Zod's `.optional()` rejects (it expects the field to be missing, not present-but-undefined).
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.41.2] - 2026-03-27
+
+### Fixed
+
+- **MCP initialization floods Claude Desktop with JSON parse errors** (Issues #628, #627, #567): Intercept `process.stdout.write` in stdio mode to redirect non-JSON-RPC output to stderr. Console method suppression alone was insufficient — native modules (better-sqlite3), n8n packages, and third-party code can call `process.stdout.write()` directly, corrupting the JSON-RPC stream. Only writes containing valid JSON-RPC messages (`{"jsonrpc":...}`) are now allowed through stdout; everything else is redirected to stderr. This fixes the flood of "Unexpected token is not valid JSON" warnings on every new chat in Claude Desktop, including leaked `refCount`, `dbPath`, `clientVersion`, `protocolVersion`, and other debug strings.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.41.1] - 2026-03-27
+
+### Fixed
+
+- **If node operators silently fail at runtime** (Issue #665): Replaced incorrect operator names `isNotEmpty`/`isEmpty` with `notEmpty`/`empty` across all validators, sanitizer, documentation, and error messages. n8n's execution engine does not recognize `isNotEmpty`/`isEmpty` — unknown operators silently return `false`, causing If/Switch conditions to always take the wrong branch. Added auto-correction in the sanitizer so existing workflows using legacy names are fixed on update.
+
+- **`addConnection` creates broken connections with `type: "0"`** (Issue #659): Fixed two edge cases where numeric `targetInput` or `sourceOutput` values leaked into connection objects as `"type": "0"` instead of `"type": "main"`. Numeric `targetInput` values are now remapped to `"main"`, and the `sourceOutput` remapping guard was relaxed to handle redundant `sourceOutput: 0` + `sourceIndex: 0` combinations. Also resolves Issue #653 (dangling connections after `removeNode`) which was caused by malformed connections from this bug.
+
+- **`__patch_find_replace` corrupts Code node jsCode** (Issue #642): Implemented the `__patch_find_replace` feature for surgical string edits in `updateNode` operations. Previously, passing `{"parameters.jsCode": {"__patch_find_replace": [...]}}` stored the patch object literally as jsCode, producing `[object Object]` at runtime. The feature now reads the current string value, applies each `{find, replace}` entry sequentially, and writes back the modified string. Includes validation for patch format, target property existence, and string type.
+
+### Improved
+
+- Extracted `OPERATOR_CORRECTIONS` and `UNARY_OPERATORS` to module-level constants for better performance and single source of truth
+- Added `exists`/`notExists` to unary operator lists for consistency across sanitizer and validator
+- Fixed recovery guidance referencing non-existent `validate_node_operation` tool (now `validate_node`)
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.41.0] - 2026-03-25
 
 ### Changed

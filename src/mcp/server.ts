@@ -325,6 +325,13 @@ export class N8NDocumentationMCPServer {
         process.stderr.write(`[BULLETPROOF-DEBUG] Pre-execution structuredContent initialized for ${name}\n`);
       }
 
+      // Strip undefined values from args (#611) — VS Code extension sends
+      // explicit undefined values which Zod's .optional() rejects.
+      // Removing them makes Zod treat them as missing (which .optional() allows).
+      if (processedArgs) {
+        processedArgs = JSON.parse(JSON.stringify(processedArgs));
+      }
+
       try {
         // Enhanced debug logging with Node.js version info
         process.stderr.write(`[BULLETPROOF-DEBUG] Starting tool execution: ${name} (Node.js ${process.version})\n`);
