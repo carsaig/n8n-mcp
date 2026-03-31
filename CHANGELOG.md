@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.43.0] - 2026-03-31
+
+### Added
+
+- **`n8n_generate_workflow` tool**: New MCP tool that enables AI-powered workflow generation from natural language descriptions. Available on the hosted service with handler delegation pattern for extensibility.
+
+- **Handler injection API**: `EngineOptions.generateWorkflowHandler` allows hosting environments to provide custom workflow generation backends. Handler receives helpers for `createWorkflow`, `validateWorkflow`, `autofixWorkflow`, and `getWorkflow`.
+
+- **Tool documentation**: Full essentials and deep documentation for `n8n_generate_workflow` via `tools_documentation`.
+
+### Fixed
+
+- **Tools documentation count**: Corrected n8n API tools count and added missing `n8n_manage_datatable` entry to tools overview.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.42.3] - 2026-03-30
+
+### Improved
+
+- **Patterns response trimmed for token efficiency** (Issue #683): Task-specific patterns response reduced ~64% — dropped redundant `displayName`, shortened field names (`frequency` → `freq`), capped chains at 5, and shortened chain node types to last segment.
+
+- **`patterns` mode added to `tools_documentation`**: Was missing from both essentials and full docs. AI agents can now discover patterns mode through the standard documentation flow.
+
+- **`includeOperations` omission behavior documented**: Added note that trigger nodes and freeform nodes (Code, HTTP Request) omit the `operationsTree` field.
+
+- **`search_nodes` examples trimmed**: Reduced from 11 to 6 examples in full docs, removing near-duplicates.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.42.2] - 2026-03-30
+
+### Fixed
+
+- **`workflow-patterns.json` missing from npm package** (Issue #681): Added `data/workflow-patterns.json` to the `files` array in `package.json` so the patterns file is included in the published npm package and works out of the box without manual generation.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.42.1] - 2026-03-30
+
+### Fixed
+
+- **Community nodes missing from database after rebuild**: Restored 584 community nodes from the n8n 2.13.3 snapshot and re-extracted operations with resource grouping from `properties_schema`. 366 community nodes now have proper resource-grouped operations.
+
+- **Community node service missing resource extraction**: `extractOperations()` in `community-node-service.ts` was not extracting `resource` from `displayOptions.show.resource`, same issue that was fixed in `property-extractor.ts` in v2.42.0.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.42.0] - 2026-03-30
+
+### Added
+
+- **`includeOperations` flag for search_nodes**: Opt-in parameter that returns a resource/operation tree per search result, grouped by resource (e.g., Slack returns 7 resources with 44 operations). Saves a mandatory `get_node` round-trip when building workflows. Adds ~100-300 tokens per result.
+
+- **`searchMode: "patterns"` for search_templates**: New lightweight mode that serves workflow pattern summaries mined from 2,700+ templates. Returns common node combinations, connection chains, and frequency data per task category (10 categories: ai_automation, webhook_processing, scheduling, etc.). Use `task` parameter for category-specific patterns or omit for overview.
+
+- **Workflow pattern mining script** (`npm run mine:patterns`): Extracts node frequency, co-occurrence, and connection topology from the template database. Two-pass pipeline: Pass 1 analyzes `nodes_used` metadata (no decompression), Pass 2 decompresses workflows for connection analysis. Produces `data/workflow-patterns.json` with 554 node types, 3,201 edges, and 5,246 chains.
+
+### Fixed
+
+- **Operations extraction now includes resource grouping**: The property extractor was using `find()` to get only the first `operation` property, but n8n nodes have multiple operation properties each mapped to a different resource via `displayOptions.show.resource`. Changed to `filter()` to capture all operation properties. Slack went from 17 flat operations to 44 operations across 7 named resources.
+
+- **FTS-to-LIKE fallback dropped search options**: When the FTS5 search fell back to LIKE-based search (e.g., for "http request"), the `options` object (including `includeOperations`, `includeExamples`, `source`) was silently lost. Now correctly passed through.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.41.4] - 2026-03-30
 
 ### Fixed
