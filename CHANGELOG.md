@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.46.0] - 2026-04-03
+
+### Added
+
+- **`patchNodeField` operation for `n8n_update_partial_workflow`** — a dedicated, strict find/replace operation for surgical string edits in node fields (Fixes #696). Key features:
+  - **Strict error handling**: errors if find string not found (unlike `__patch_find_replace` which only warns)
+  - **Ambiguity detection**: errors if find matches multiple times unless `replaceAll: true` is set
+  - **`replaceAll` flag**: replace all occurrences of a string in a single patch
+  - **`regex` flag**: use regex patterns for advanced find/replace
+  - Top-level operation type for better discoverability
+
+### Security
+
+- **Prototype pollution protection** — `setNestedProperty` and `getNestedProperty` now reject paths containing `__proto__`, `constructor`, or `prototype`. Protects both `patchNodeField` and `updateNode` operations
+- **ReDoS protection** — regex patterns with nested quantifiers or overlapping alternations are rejected to prevent catastrophic backtracking
+- **Resource limits** — max 50 patches per operation, max 500-char regex patterns, max 512KB field size for regex operations
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.45.1] - 2026-04-02
+
+### Fixed
+
+- **Use stdio-wrapper.js as default bin entry point** — the previous entry point (`index.js`) wrote INFO-level logs to stdout, corrupting JSON-RPC MCP transport for stdio-mode users (Fixes #693, Related: #555, #628)
+- **Preserve node credentials during full workflow updates** — `n8n_update_full_workflow` now carries forward existing credential references from the server when user-provided nodes omit them, preventing "missing credentials" errors on PUT (Fixes #689)
+
+### Changed
+
+- **Updated publish scripts** to use `stdio-wrapper.js` as the npm bin entry point, ensuring the fix persists across releases
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.45.0] - 2026-04-01
 
 ### Changed
