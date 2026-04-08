@@ -96,10 +96,16 @@ export interface SingleSessionHTTPServerOptions {
 export class SingleSessionHTTPServer {
   // Map to store transports by session ID (following SDK pattern)
   // Stores both StreamableHTTP and SSE transports; use instanceof to discriminate
-  private transports: { [sessionId: string]: StreamableHTTPServerTransport | SSEServerTransport } = {};
-  private servers: { [sessionId: string]: N8NDocumentationMCPServer } = {};
-  private sessionMetadata: { [sessionId: string]: { lastAccess: Date; createdAt: Date } } = {};
-  private sessionContexts: { [sessionId: string]: InstanceContext | undefined } = {};
+  // Null-prototype objects: sessionId comes from user-controlled HTTP headers
+  // (clients can send arbitrary `Mcp-Session-Id` values), so these maps must
+  // not inherit from Object.prototype. Otherwise a session id of `__proto__`
+  // or `constructor` would both pass truthiness checks and write to
+  // Object.prototype when we assign properties to the looked-up value.
+  // Addresses CodeQL js/prototype-polluting-assignment at lines 309 and 399.
+  private transports: { [sessionId: string]: StreamableHTTPServerTransport | SSEServerTransport } = Object.create(null);
+  private servers: { [sessionId: string]: N8NDocumentationMCPServer } = Object.create(null);
+  private sessionMetadata: { [sessionId: string]: { lastAccess: Date; createdAt: Date } } = Object.create(null);
+  private sessionContexts: { [sessionId: string]: InstanceContext | undefined } = Object.create(null);
   private contextSwitchLocks: Map<string, Promise<void>> = new Map();
   private consoleManager = new ConsoleManager();
   private expressServer: any;
@@ -305,7 +311,14 @@ export class SingleSessionHTTPServer {
    * Update session last access time
    */
   private updateSessionAccess(sessionId: string): void {
-    if (this.sessionMetadata[sessionId]) {
+    // Own-property check (not truthy lookup) so a sessionId of `__proto__`
+    // or `constructor` can't slip through on a plain-object container and
+    // end up writing to `Object.prototype.lastAccess`. Storage is also a
+    // null-prototype object (see class-property initializers), so both
+    // layers must be bypassed for pollution to happen.
+    // Using `hasOwnProperty.call` rather than `Object.hasOwn` because the
+    // TS target is ES2020.
+    if (Object.prototype.hasOwnProperty.call(this.sessionMetadata, sessionId)) {
       this.sessionMetadata[sessionId].lastAccess = new Date();
     }
   }
@@ -394,8 +407,11 @@ export class SingleSessionHTTPServer {
       // Update the session context
       this.sessionContexts[sessionId] = newContext;
 
-      // Update the MCP server's instance context if it exists
-      if (this.servers[sessionId]) {
+      // Update the MCP server's instance context if it exists. Own-property
+      // check prevents a malicious sessionId (`__proto__`) from writing
+      // `instanceContext` onto Object.prototype via a plain-object container.
+      // Storage is also null-prototype — defense in depth.
+      if (Object.prototype.hasOwnProperty.call(this.servers, sessionId)) {
         (this.servers[sessionId] as any).instanceContext = newContext;
       }
     }
@@ -515,9 +531,32 @@ export class SingleSessionHTTPServer {
     // Wrap all operations to prevent console interference
     return this.consoleManager.wrapOperation(async () => {
       try {
+        // SECURITY (GHSA-4ggg-h7ph-26qr): validate instance-supplied URL.
+        if (instanceContext?.n8nApiUrl) {
+          const { SSRFProtection } = await import('./utils/ssrf-protection');
+          const ssrfResult = await SSRFProtection.validateWebhookUrl(instanceContext.n8nApiUrl);
+          if (!ssrfResult.valid) {
+            logger.warn('SSRF protection blocked instance context URL', {
+              reason: ssrfResult.reason,
+              instanceId: instanceContext.instanceId
+            });
+            if (!res.headersSent) {
+              res.status(400).json({
+                jsonrpc: '2.0',
+                error: {
+                  code: -32602,
+                  message: 'Invalid instance configuration'
+                },
+                id: req.body?.id ?? null
+              });
+            }
+            return;
+          }
+        }
+
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
         const isInitialize = req.body ? isInitializeRequest(req.body) : false;
-        
+
         // Log comprehensive incoming request details for debugging
         logger.info('handleRequest: Processing MCP request - SDK PATTERN', {
           requestId: req.get('x-request-id') || 'unknown',
@@ -1338,43 +1377,52 @@ export class SingleSessionHTTPServer {
       });
 
       // Extract instance context from headers if present (for multi-tenant support)
-      const instanceContext: InstanceContext | undefined = (() => {
+      let instanceContext: InstanceContext | undefined;
+      {
         // Use type-safe header extraction
         const headers = extractMultiTenantHeaders(req);
         const hasUrl = headers['x-n8n-url'];
         const hasKey = headers['x-n8n-key'];
 
-        if (!hasUrl && !hasKey) return undefined;
-
-        // Create context with proper type handling
-        const context: InstanceContext = {
-          n8nApiUrl: hasUrl || undefined,
-          n8nApiKey: hasKey || undefined,
-          instanceId: headers['x-instance-id'] || undefined,
-          sessionId: headers['x-session-id'] || undefined
-        };
-
-        // Add metadata if available
-        if (req.headers['user-agent'] || req.ip) {
-          context.metadata = {
-            userAgent: req.headers['user-agent'] as string | undefined,
-            ip: req.ip
+        if (hasUrl || hasKey) {
+          // Create context with proper type handling
+          const candidate: InstanceContext = {
+            n8nApiUrl: hasUrl || undefined,
+            n8nApiKey: hasKey || undefined,
+            instanceId: headers['x-instance-id'] || undefined,
+            sessionId: headers['x-session-id'] || undefined
           };
-        }
 
-        // Validate the context
-        const validation = validateInstanceContext(context);
-        if (!validation.valid) {
-          logger.warn('Invalid instance context from headers', {
-            errors: validation.errors,
-            hasUrl: !!hasUrl,
-            hasKey: !!hasKey
-          });
-          return undefined;
-        }
+          // Add metadata if available
+          if (req.headers['user-agent'] || req.ip) {
+            candidate.metadata = {
+              userAgent: req.headers['user-agent'] as string | undefined,
+              ip: req.ip
+            };
+          }
 
-        return context;
-      })();
+          // SECURITY (GHSA-4ggg-h7ph-26qr): fail closed on invalid context.
+          const validation = validateInstanceContext(candidate);
+          if (!validation.valid) {
+            logger.warn('Invalid instance context from headers', {
+              errors: validation.errors,
+              hasUrl: !!hasUrl,
+              hasKey: !!hasKey
+            });
+            res.status(400).json({
+              jsonrpc: '2.0',
+              error: {
+                code: -32602,
+                message: 'Invalid instance configuration'
+              },
+              id: req.body?.id ?? null
+            });
+            return;
+          }
+
+          instanceContext = candidate;
+        }
+      }
 
       // Log context extraction for debugging (only if context exists)
       if (instanceContext) {
@@ -1644,6 +1692,10 @@ export class SingleSessionHTTPServer {
    *
    * Restored sessions are "dormant" until a client makes a request, at which
    * point the transport and server will be initialized normally.
+   *
+   * @security Restored contexts are validated synchronously via
+   * validateInstanceContext. Embedders are responsible for not persisting
+   * hostnames they do not trust. See GHSA-4ggg-h7ph-26qr.
    *
    * @param sessions - Array of session state objects from exportSessionState()
    * @returns Number of sessions successfully restored

@@ -144,8 +144,8 @@ n8n-mcp-wrapper.sh
 .qoder/rules/byterover-rules.md
 .augment/rules/byterover-rules.md
 
-# MCP configuration files
-.mcp.json
+# MCP configuration files (all variants: .mcp.json, .mcp.json.bk, .mcp.json.bak, etc.)
+.mcp.json*
 
 # UI Apps build output
 ui-apps/dist/
