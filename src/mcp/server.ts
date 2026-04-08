@@ -38,6 +38,19 @@ import {
   STANDARD_PROTOCOL_VERSION 
 } from '../utils/protocol-version';
 
+/**
+ * Escape a string for safe use as a literal inside `new RegExp(...)`.
+ *
+ * Addresses CodeQL js/regex-injection: search queries are user-controlled,
+ * and passing them directly into `new RegExp` lets a crafted query either
+ * alter matching semantics (e.g. `.*`) or trigger polynomial/exponential
+ * backtracking. We only ever want literal substring matching with word
+ * boundaries, so escaping all regex metacharacters is the right fix.
+ */
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 interface NodeRow {
   node_type: string;
   package_name: string;
@@ -1570,7 +1583,7 @@ export class N8NDocumentationMCPServer {
       score = 800;
     }
     // Word boundary match in display name
-    else if (new RegExp(`\\b${query_lower}\\b`, 'i').test(node.display_name)) {
+    else if (new RegExp(`\\b${escapeRegExp(query_lower)}\\b`, 'i').test(node.display_name)) {
       score = 700;
     }
     // Contains in display name
@@ -1628,7 +1641,7 @@ export class N8NDocumentationMCPServer {
         score = 800;
       }
       // Word boundary match in display name
-      else if (new RegExp(`\\b${query_lower}\\b`, 'i').test(node.display_name)) {
+      else if (new RegExp(`\\b${escapeRegExp(query_lower)}\\b`, 'i').test(node.display_name)) {
         score = 700;
       }
       // Contains in display name

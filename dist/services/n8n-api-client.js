@@ -48,10 +48,21 @@ class N8nApiClient {
         this.versionPromise = null;
         const { baseUrl, apiKey, timeout = 30000, maxRetries = 3 } = config;
         this.maxRetries = maxRetries;
-        this.baseUrl = baseUrl;
-        const apiUrl = baseUrl.endsWith('/api/v1')
-            ? baseUrl
-            : `${baseUrl.replace(/\/$/, '')}/api/v1`;
+        let normalizedBase;
+        try {
+            const parsed = new URL(baseUrl);
+            parsed.hash = '';
+            parsed.username = '';
+            parsed.password = '';
+            normalizedBase = parsed.toString().replace(/\/$/, '');
+        }
+        catch {
+            normalizedBase = baseUrl;
+        }
+        this.baseUrl = normalizedBase;
+        const apiUrl = normalizedBase.endsWith('/api/v1')
+            ? normalizedBase
+            : `${normalizedBase}/api/v1`;
         this.client = axios_1.default.create({
             baseURL: apiUrl,
             timeout,
@@ -97,11 +108,7 @@ class N8nApiClient {
         }
     }
     async fetchVersionOnce() {
-        let version = (0, n8n_version_1.getCachedVersion)(this.baseUrl);
-        if (!version) {
-            version = await (0, n8n_version_1.fetchN8nVersion)(this.baseUrl);
-        }
-        return version;
+        return (0, n8n_version_1.getCachedVersion)(this.baseUrl) ?? await (0, n8n_version_1.fetchN8nVersion)(this.baseUrl);
     }
     getCachedVersionInfo() {
         return this.versionInfo;
