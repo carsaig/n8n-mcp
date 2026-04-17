@@ -2751,7 +2751,8 @@ const createTableSchema = z.object({
   columns: z.array(z.object({
     name: z.string().min(1, 'Column name cannot be empty'),
     type: z.enum(['string', 'number', 'boolean', 'date']).optional(),
-  })).optional(),
+  })).min(1, 'At least one column is required'),
+  projectId: z.string().optional(),
 });
 
 const listTablesSchema = z.object({
@@ -2965,9 +2966,17 @@ export async function handleDeleteRows(args: unknown, context?: InstanceContext)
       ...params,
     };
     const result = await client.deleteDataTableRows(tableId, queryParams as any);
+
+    // Strip meaningless all-null "after" rows from dryRun responses — after a
+    // delete there is no "after" state, so the template row with null fields
+    // surfaces as noise for callers (QA #10).
+    const cleanedResult = params.dryRun && Array.isArray(result)
+      ? result.filter((row: any) => row?.dryRunState !== 'after')
+      : result;
+
     return {
       success: true,
-      data: result,
+      data: cleanedResult,
       message: params.dryRun ? 'Dry run: rows matched for deletion (no changes applied)' : 'Rows deleted successfully',
     };
   } catch (error) {
