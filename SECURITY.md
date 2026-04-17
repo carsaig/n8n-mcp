@@ -124,5 +124,9 @@ Out-of-scope examples:
 - General LLM prompt injection risks (these affect all MCP servers equally)
 - Denial of service through normal API usage
 
+<<<<<<< HEAD
 For deployment hardening guidance, see the [Security & Hardening guide](./docs/SECURITY_HARDENING.md).
 >>>>>>> 217d737aa56cab94ee432026d71a9fa6044a1367
+=======
+For deployment hardening guidance, see the [Security & Hardening guide](./docs/SECURITY_HARDENING.md). For the STRIDE threat model, see [docs/THREAT_MODEL.md](./docs/THREAT_MODEL.md).
+>>>>>>> 7b3ccb10ca70a7d8b8ecdf772199abdf28ef814d

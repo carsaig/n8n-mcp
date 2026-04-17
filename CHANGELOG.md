@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.47.12] - 2026-04-17
+
+Batch of ten fixes from the 2026-04-16 staging QA regression (release-blockers and polish items shipped together).
+
+### Fixed
+
+- **`get_node` version modes no longer return `upgradeSafe: true` with no data (QA #1 + #12, HIGH).** `versions`, `compare`, `breaking`, and `migrations` modes now check whether version metadata is populated for the node before computing their booleans. When metadata is missing, they return `{ available: false, reason: "Version metadata not populated…" }` instead of a confidently-zero response. Agents that previously saw `upgradeSafe: true` for a known-breaking HTTP Request v1 → v4 upgrade will now get an explicit "no data" signal. `getVersionSummary` also falls back to the node row's `version` field so `detail: standard` no longer reports `currentVersion: "unknown"` while `isVersioned: true` in the same response.
+- **`rewireConnection` no longer silently corrupts the connection map (QA #7, HIGH).** `applyRewireConnection` now resolves `source` / `from` / `to` to concrete node objects up front, passes resolved names through to the inner remove/add calls, skips the add when `to` is already a target of `source` (previously caused a duplicated edge), and asserts an edge-count invariant that throws if the rewrite would leave the graph in an inconsistent state. Added regression tests for name-based rewire, ID-based rewire, and rewire-to-already-connected-target.
+- **`search_templates` `by_metadata` returns `available: false` when metadata is missing (QA #11, HIGH).** Previously returned an empty `items: []` that callers couldn't distinguish from "no matches". Now returns `{ available: false, reason: "Template metadata has not been enriched yet…" }` when no templates have `metadata_json` populated, and `available: true` on hits. Callers get an actionable signal to fall back to `keyword`, `by_nodes`, or `patterns`.
+- **`search_templates` `by_task: webhook_processing` no longer returns schedule/form-triggered templates (QA #2, MEDIUM).** Removed `n8n-nodes-base.httpRequest` from the `webhook_processing` task mapping. HTTP Request is not a trigger, so its presence matched any workflow that used outbound HTTP — including schedule and form triggered ones. Now matches only workflows that include the webhook trigger node.
+- **QA #3 (MEDIUM) — deferred.** An initial attempt to reject invalid `operation` values in `NodeSpecificValidators.validateSlack` used a hardcoded resource→operations map, which turned out to disagree with the actual Slack node's schema (ironically, `post` — the value the QA report flagged as "silently accepted" — is a real Slack message op in n8n). Rather than ship a regression that rejects valid configs, the hardcoded list was removed and the issue deferred until the validator can derive the allowed set from the node's loaded `properties_schema`.
+- **`moveNode` no longer silently mutates state when the wrong param name is passed (QA #6, MEDIUM).** `validateMoveNode` now catches the common `newPosition` typo with a "did you mean 'position'?" message *before* mutation, and also validates that `position` is a 2-element numeric array. Previously the operation set `node.position` to `undefined` and only failed at the final workflow-shape check with a cryptic `position Required` error.
+- **`n8n_autofix_workflow` webhook path UUID is now stable across preview and apply (QA #4, LOW).** Previously each call generated a fresh `crypto.randomUUID()`, so the path shown in preview didn't match the path applied to the workflow. The UUID is now derived deterministically via UUID v5 (SHA-1-based per RFC 4122) from `workflow.id + node.id`, so preview and apply always agree. Downstream systems pre-configured against the preview value will now receive the same path.
+- **`n8n_update_partial_workflow` activate/deactivate ops are now mutually exclusive (QA #8, LOW).** A batch like `[activateWorkflow, deactivateWorkflow]` previously returned `active: true` because the first op's flag was never cleared. The appliers now clear the opposite flag so last-op-wins semantics apply.
+- **`n8n_update_partial_workflow` tool description now documents `patchNodeField` parameters inline (QA #5, LOW).** Added `fieldPath (dot path, e.g. "parameters.jsCode") and patches: [{find, replace}]` to the short tool description so agents can construct the operation without an extra `tools_documentation` round-trip.
+- **`n8n_manage_datatable` `deleteRows` dryRun no longer returns a null "after" row (QA #10, LOW).** Stripped entries with `dryRunState: "after"` from delete responses — those rows always had every field null because there is no "after" state for a delete, and they surfaced as noise. Update/upsert dryRun responses are unchanged.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.47.11] - 2026-04-16
+
+### Security
+
+- Fix sensitive data logging in HTTP mode (GHSA-pfm2-2mhg-8wpx). Reported by @S4nso.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.47.10] - 2026-04-16
+
+### Added
+
+- **`projectId` parameter on `n8n_manage_datatable` `createTable` (Issue #731, reported by @nesl247).** Tables can now be created directly in a specific n8n project instead of always landing in the default/personal project. The n8n public API (`POST /data-tables`) already accepts `projectId` as an optional body field — it was never wired through the MCP tool. `projectId` is threaded through the tool inputSchema, the Zod `createTableSchema`, and the `createDataTable` API client signature, matching the existing pattern on `n8n_create_workflow`. Workflows in team projects that rely on project-scoped data tables (e.g. queue-based processing) can now be fully automated via MCP.
+
+### Changed
+
+- **`columns` is now required (at least one) for `n8n_manage_datatable` `createTable`.** Previously the tool schema marked `columns` as optional, but the underlying n8n API rejects the call with `VALIDATION_ERROR: request/body must have required property 'columns'`. The Zod schema now enforces `.min(1, 'At least one column is required')` so the failure surfaces at the MCP boundary with a clear message instead of an opaque 400 from the API round-trip. Tool inputSchema description, `keyParameters`, `full.description`, parameter docs, and pitfalls are all updated to match.
+
+### Fixed
+
+- **Removed incorrect pitfall claiming `projectId` could not be set via the public API** in `n8n_manage_datatable` tool docs. The n8n API has always supported it; this documentation was misleading agents into manual UI workarounds.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.47.9] - 2026-04-16
+
+### Changed
+
+- **Update n8n to 2.16.1.** Bumped `n8n-nodes-base` 2.15.0 → 2.16.0, `n8n-core` 2.15.0 → 2.16.1, `n8n-workflow` 2.14.1 → 2.16.0, and `@n8n/n8n-nodes-langchain` 2.14.1 → 2.16.1. These are exact-pinned to match the coherent dependency set that ships with n8n 2.16.1, since the individual packages' `latest` dist-tags on npm lag behind the meta-package release (e.g. `n8n-workflow@latest` is 2.13.1 while n8n 2.16.1 actually pins 2.16.0).
+- **Rebuilt node database.** 1,505 nodes total: 812 core (675 from `n8n-nodes-base` + 137 from `@n8n/n8n-nodes-langchain`) and 693 community nodes (605 verified, 88 unverified). Community nodes preserved incrementally across the rebuild via backup/restore — 108 new READMEs fetched for nodes added since the last sync.
+- **Updated README** n8n version badge (2.14.2 → 2.16.1) and node counts (1,396 → 1,505; 516 → 605 verified community).
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.47.8] - 2026-04-14
 
 ### Fixed
