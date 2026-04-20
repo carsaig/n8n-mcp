@@ -11,5 +11,5 @@ Date: 2026-02-17
 0ad8cdf chore: compose/docs bump and release notes for v2.35.2 (#75)```
 
 ## Container images
-- ghcr.io/carsaig/n8n-mcp:v2.35.2-cs.1
-- ghcr.io/carsaig/n8n-mcp:latest
+- ghcr.io/carsaig/n8n-mcp:v2.35.2-cs.3s.1
+- ghcr.io/carsaig/n8n-mcp:v2.35.2-cs.3st
