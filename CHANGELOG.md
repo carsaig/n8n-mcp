@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.49.0] - 2026-04-28
+
+### Changed
+
+- **Updated n8n to 2.18.4** (from 2.16.1). All four n8n packages bumped to the versions pinned by `n8n@stable`:
+  - `n8n-nodes-base`: 2.16.0 → 2.18.3
+  - `n8n-core`: 2.16.1 → 2.18.3
+  - `n8n-workflow`: 2.16.0 → 2.18.3
+  - `@n8n/n8n-nodes-langchain`: 2.16.1 → 2.18.3
+  - Pins are now exact (no caret) to prevent npm from auto-resolving to `2.19.0`, which `n8n@stable` does not yet endorse and which would also force a different `zod` peer.
+- **Bumped `zod` to 3.25.67** (from 3.24.1) to satisfy the new `zod` peer dependency declared by `n8n-core@2.18.3` and `n8n-workflow@2.18.3` — the same version `n8n@stable` itself depends on.
+- **Rebuilt node database**: 1,588 nodes total — 820 core (675 from `n8n-nodes-base` + 145 from `@n8n/n8n-nodes-langchain`) + 768 community (668 verified + 100 from npm). Community READMEs refreshed via `generate:docs:readme-only` (763/768 with READMEs, 581/768 with AI summaries — the AI-summary backfill for newly-added community nodes runs separately via the local LLM step).
+- **README badges and node counts updated** to reflect the new n8n version, node totals, and current passing-test count (`5,418`).
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.48.3] - 2026-04-28
+
+### Fixed
+
+- **Validator warning for `__rl` resourceLocator fields missing `cachedResultName` (#715, originally reported in #516 by @upsurge911-lgtm).** When a `__rl` field has `mode` and `value` but no `cachedResultName`, the workflow runs but the n8n UI shows "Choose..." in dropdowns and dependent metadata fetches (column lists, base names, etc.) never fire — users see "No columns found" with no obvious cause. Pre-fix the validator was completely silent on this. New `missing-cached-result-name` warning fires at `runtime`/`ai-friendly`/`strict` profiles (suppressed at `minimal`). The warning is gated to modes where the n8n UI renders a dropdown that displays the cached label (`id`, `list`, `name`) — modes with raw inputs (`expression`, `url`) are skipped to avoid false positives. The autofix half (live n8n API resolution + placeholder fallback) ships in a separate follow-up PR.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.48.2] - 2026-04-28
+
+### Fixed
+
+- **`n8n_audit_instance` error message now distinguishes server-side from client-side failures (#736, reported by @waltho1123-cloud).** Pre-fix the warning was always `Built-in audit failed: <message>`, hiding HTTP status. The reporter's Zeabur deployment generates the `Invalid URL` string inside n8n's own audit code (likely from missing `N8N_PROTOCOL`/`N8N_HOST` env vars) and returned it as the response body — but the warning made it look like a client bug. Three new shapes: `endpoint not available` (404, unchanged); `Built-in audit failed (HTTP <status>): <reason>` for any other status; `Built-in audit failed (no response from n8n): <reason>` when no status was returned (timeouts, ECONNREFUSED). Also fixed a long-standing nit where the error path computed `builtinAuditMs` against `totalStart` instead of `auditStart`.
+- **`n8n_manage_credentials` accepts `oAuth2Api` + `clientCredentials` payloads (#740, reported by @bwsnwl).** n8n's upstream Ajv schema for `oAuth2Api` has a known bug: the `if/then/else` on `useDynamicClientRegistration` uses `properties.x.enum` to test value, which evaluates true vacuously when the field is absent — so both `then` branches fire simultaneously and there is no payload shape that satisfies the schema for a plain `clientCredentials` grant. New `applyCredentialDataShims` helper normalizes the payload for that specific combination: strips `useDynamicClientRegistration` when falsy, injects `sendAdditionalBodyProperties: false`, `additionalBodyProperties: ''`, and `serverUrl: ''` (only when the DCR branch fires spuriously — explicit `useDynamicClientRegistration: true` callers are left alone so n8n surfaces real missing-field errors). Applied symmetrically on both create and update paths. Will be removed once n8n fixes the schema upstream.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.48.1] - 2026-04-28
+
+### Fixed
+
+- **`n8n_update_partial_workflow` validateOnly path now matches the apply path (#744, reported by @Valirius).** Two interacting bugs:
+  - **Path divergence:** `validateOnly: true` returned the structural-validation early-exit BEFORE `validateWorkflowStructure` ran. Reporters could see a green `valid: true` from validate-only and then fail the apply call with a structural error. The structural check now runs in both paths, and the validate-only response includes the same `structureErrors` the apply path would surface, plus a `valid` boolean that reflects post-diff structural validity. The diff engine's `validateOnly` return now carries the simulated post-diff `workflow` so the handler has something to validate against.
+  - **Zod 4 record-key incompatibility:** Single-arg `z.record(valueSchema)` is reinterpreted by Zod 4 (bundled by `@modelcontextprotocol/sdk`) as `z.record(keySchema=valueSchema)`, causing node-name strings like `"W-05b Set Context"` to fail with `_zod` / `Invalid key in record`. All `z.record` calls in `n8n-validation.ts` (`workflowNodeSchema.parameters`, `.credentials`, `workflowConnectionSchema`) and `handlers-n8n-manager.ts` (`createWorkflowSchema.connections`, `updateWorkflowSchema.connections`) now use the explicit two-arg `z.record(z.string(), valueSchema)` form which is unambiguous in both Zod 3 and Zod 4.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.48.0] - 2026-04-28
+
+Three validator/diff false-positive fixes that were blocking valid workflows from being authored or updated via the MCP tools.
+
+### Fixed
+
+- **`addConnection` no longer rejects multiple Switch outputs to the same target (#738, reported by @priyasogani8-star).** `validateAddConnection` was scanning every `sourceIndex` slot when checking for duplicates, so wiring Switch output 1 to a node that already had a connection from output 0 falsely failed with "Connection already exists". The check now resolves smart parameters (`branch`/`case`) the same way `applyAddConnection` does and only inspects the specific `(sourceOutput, sourceIndex)` slot. The error message now also includes the resolved index for clarity. Same change applied to `validateRewireConnection` to suppress duplicate sourceIndex warnings (validate + apply phases were both pushing them) — `resolveSmartParameters` gained an opt-in `silent` mode used only from validate.
+- **`validate_workflow` no longer false-flags operations on community nodes with empty schema (#739, reported by @priyasogani8-star).** `EnhancedConfigValidator.validateResourceAndOperation` was emitting `Invalid operation "X" for node ...` for any non-empty operation value when the node was missing or had empty operation metadata. The puppeteer community node (and similarly indexed packages) ARE in the local DB but with empty `operations`/`properties_schema` columns, so `getNodeOperations()` returned `[]` and any explicit operation was rejected. Three new guards: top-of-method early-exit when `getNode()` returns null, plus per-field skips when the node has zero resource schema or zero operation schema globally. Real typos on KNOWN nodes (e.g. `operation: "sendMessage"` on Slack) still surface correctly.
+- **`n8n_validate_workflow` no longer false-flags Code nodes with template literals or compact `}}` (#746, reported by @MarsSall).** `ExpressionFormatValidator.validateRecursive` walked into `jsCode`/`pythonCode` fields and fed the source to a bracket-balance check that miscounted `{{` vs `}}` on JS object literals like `[{json:{x:1}}]`. The validator now skips raw-code field keys (`jsCode`, `pythonCode`, `functionCode`) — mirrors the existing guard in `ExpressionValidator.validateParametersRecursive`. The skip applies wherever those keys appear in the parameters tree (top-level or nested).
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.47.14] - 2026-04-21
 
 ### Security
