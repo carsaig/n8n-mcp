@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.50.2] - 2026-05-04
+
+### Security
+
+- Fix SSRF in webhook URL validation (GHSA-cmrh-wvq6-wm9r). Reported by @fg0x0.
+
+### Notes
+
+- The n8n API client now validates `N8N_API_URL` through the same SSRF gate as user-supplied webhook URLs. Operators running n8n on the same host as n8n-mcp (`N8N_API_URL=http://localhost:5678` or an RFC1918 address) must set `WEBHOOK_SECURITY_MODE=moderate` (allows localhost, still blocks cloud metadata) to keep the API client functional after upgrade. Default `strict` is unchanged for production deployments with a public n8n URL.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.50.1] - 2026-05-04
+
+### Security
+
+- Fix path-segment validation gap in n8n API client (GHSA-8g7g-hmwm-6rv2). Reported by @cybercraftsolutionsllc.
+- Fix redirect-following on validated webhook, form, and chat trigger requests (GHSA-8g7g-hmwm-6rv2). Reported by @cybercraftsolutionsllc.
+- Redact mutation telemetry payloads before storage (GHSA-8g7g-hmwm-6rv2). Reported by @cybercraftsolutionsllc.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.50.0] - 2026-05-02
 
 ### Added
