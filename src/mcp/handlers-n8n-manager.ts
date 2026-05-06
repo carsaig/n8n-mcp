@@ -12,6 +12,7 @@ import {
   McpToolResponse,
   ExecutionFilterOptions,
   ExecutionMode,
+  Credential,
 } from '../types/n8n-api';
 import type { TriggerType, TestWorkflowInput } from '../triggers/types';
 import {
@@ -378,6 +379,14 @@ export function tryParseJson(val: unknown): unknown {
   try { return JSON.parse(val); } catch { return val; }
 }
 
+// Some MCP clients (e.g. opencode) serialize all schema fields including optional ones,
+// sending '' instead of omitting them. Coerce blank strings to undefined so the n8n API
+// doesn't receive `?cursor=&projectId=` and reject the request. See issue #774.
+const emptyToUndefined = (v: unknown) =>
+  typeof v === 'string' && v.trim() === '' ? undefined : v;
+const optionalEmptyAware = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess(emptyToUndefined, schema.optional());
+
 // Zod schemas for input validation
 const createWorkflowSchema = z.object({
   name: z.string(),
@@ -410,10 +419,10 @@ const updateWorkflowSchema = z.object({
 
 const listWorkflowsSchema = z.object({
   limit: z.number().min(1).max(100).optional(),
-  cursor: z.string().optional(),
+  cursor: optionalEmptyAware(z.string()),
   active: z.boolean().optional(),
   tags: z.preprocess(tryParseJson, z.array(z.string())).optional(),
-  projectId: z.string().optional(),
+  projectId: optionalEmptyAware(z.string()),
   excludePinnedData: z.boolean().optional(),
 });
 
@@ -452,11 +461,11 @@ const autofixWorkflowSchema = z.object({
 // Schema for n8n_test_workflow tool
 const testWorkflowSchema = z.object({
   workflowId: z.string(),
-  triggerType: z.enum(['webhook', 'form', 'chat']).optional(),
-  httpMethod: z.enum(['GET', 'POST', 'PUT', 'DELETE']).optional(),
-  webhookPath: z.string().optional(),
-  message: z.string().optional(),
-  sessionId: z.string().optional(),
+  triggerType: optionalEmptyAware(z.enum(['webhook', 'form', 'chat'])),
+  httpMethod: optionalEmptyAware(z.enum(['GET', 'POST', 'PUT', 'DELETE'])),
+  webhookPath: optionalEmptyAware(z.string()),
+  message: optionalEmptyAware(z.string()),
+  sessionId: optionalEmptyAware(z.string()),
   data: z.record(z.unknown()).optional(),
   headers: z.record(z.string()).optional(),
   timeout: z.number().optional(),
@@ -465,10 +474,10 @@ const testWorkflowSchema = z.object({
 
 const listExecutionsSchema = z.object({
   limit: z.number().min(1).max(100).optional(),
-  cursor: z.string().optional(),
-  workflowId: z.string().optional(),
-  projectId: z.string().optional(),
-  status: z.enum(['success', 'error', 'waiting']).optional(),
+  cursor: optionalEmptyAware(z.string()),
+  workflowId: optionalEmptyAware(z.string()),
+  projectId: optionalEmptyAware(z.string()),
+  status: optionalEmptyAware(z.enum(['success', 'error', 'waiting'])),
   includeData: z.boolean().optional(),
 });
 
@@ -2654,7 +2663,7 @@ export async function handleDeployTemplate(
 export async function handleTriggerWebhookWorkflow(args: unknown, context?: InstanceContext): Promise<McpToolResponse> {
   const triggerWebhookSchema = z.object({
     webhookUrl: z.string().url(),
-    httpMethod: z.enum(['GET', 'POST', 'PUT', 'DELETE']).optional(),
+    httpMethod: optionalEmptyAware(z.enum(['GET', 'POST', 'PUT', 'DELETE'])),
     data: z.record(z.unknown()).optional(),
     headers: z.record(z.string()).optional(),
     waitForResponse: z.boolean().optional(),
@@ -2754,12 +2763,12 @@ const createTableSchema = z.object({
     name: z.string().min(1, 'Column name cannot be empty'),
     type: z.enum(['string', 'number', 'boolean', 'date']).optional(),
   })).min(1, 'At least one column is required'),
-  projectId: z.string().optional(),
+  projectId: optionalEmptyAware(z.string()),
 });
 
 const listTablesSchema = z.object({
   limit: z.number().min(1).max(100).optional(),
-  cursor: z.string().optional(),
+  cursor: optionalEmptyAware(z.string()),
 });
 
 const updateTableSchema = tableIdSchema.extend({
@@ -2772,10 +2781,10 @@ const coerceJsonFilter = z.preprocess(tryParseJson, dataTableFilterSchema);
 
 const getRowsSchema = tableIdSchema.extend({
   limit: z.number().min(1).max(100).optional(),
-  cursor: z.string().optional(),
+  cursor: optionalEmptyAware(z.string()),
   filter: z.union([coerceJsonFilter, z.string()]).optional(),
-  sortBy: z.string().optional(),
-  search: z.string().optional(),
+  sortBy: optionalEmptyAware(z.string()),
+  search: optionalEmptyAware(z.string()),
 });
 
 const insertRowsSchema = tableIdSchema.extend({
@@ -2993,11 +3002,52 @@ export async function handleDeleteRows(args: unknown, context?: InstanceContext)
 // SECURITY: Never log credential data values (they contain secrets like API keys, passwords).
 // Only log credential name, type, and ID.
 
-const listCredentialsSchema = z.object({}).passthrough();
+const listCredentialsSchema = z.object({
+  includeUsage: z.boolean().optional(),
+}).passthrough();
 
 const getCredentialSchema = z.object({
   id: z.string({ required_error: 'Credential ID is required' }),
+  includeUsage: z.boolean().optional(),
 });
+
+interface CredentialUsageEntry {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
+async function buildCredentialUsageMap(
+  client: N8nApiClient
+): Promise<Map<string, CredentialUsageEntry[]>> {
+  const usage = new Map<string, CredentialUsageEntry[]>();
+  const workflows = await client.listAllWorkflows();
+  for (const wf of workflows) {
+    if (!wf.id) continue;
+    const entry: CredentialUsageEntry = {
+      id: wf.id,
+      name: wf.name,
+      active: wf.active ?? false,
+    };
+    const seenForThisWorkflow = new Set<string>();
+    for (const node of wf.nodes ?? []) {
+      if (!node.credentials) continue;
+      for (const credConfig of Object.values(node.credentials)) {
+        const credId = (credConfig as { id?: unknown } | null)?.id;
+        if (typeof credId !== 'string' || credId === '') continue;
+        if (seenForThisWorkflow.has(credId)) continue;
+        seenForThisWorkflow.add(credId);
+        const list = usage.get(credId);
+        if (list) {
+          list.push(entry);
+        } else {
+          usage.set(credId, [entry]);
+        }
+      }
+    }
+  }
+  return usage;
+}
 
 const createCredentialSchema = z.object({
   name: z.string({ required_error: 'Credential name is required' }),
@@ -3020,17 +3070,38 @@ const getCredentialSchemaTypeSchema = z.object({
   type: z.string({ required_error: 'Credential type is required' }),
 });
 
+type CredentialWithUsage = Credential & {
+  usedIn?: CredentialUsageEntry[];
+  usageCount?: number;
+};
+
 export async function handleListCredentials(args: unknown, context?: InstanceContext): Promise<McpToolResponse> {
   try {
     const client = ensureApiConfigured(context);
-    listCredentialsSchema.parse(args);
+    const { includeUsage } = listCredentialsSchema.parse(args);
     const result = await client.listCredentials();
+    let credentials: CredentialWithUsage[] = result.data;
+    let usageScanError: string | undefined;
+    if (includeUsage) {
+      try {
+        const usageMap = await buildCredentialUsageMap(client);
+        credentials = result.data.map((cred) => {
+          const usedIn = (cred.id ? usageMap.get(cred.id) : undefined) ?? [];
+          return { ...cred, usedIn, usageCount: usedIn.length };
+        });
+      } catch (scanError) {
+        // Degrade gracefully: still return the base credential list rather than
+        // failing the whole call when only the workflow scan failed.
+        usageScanError = scanError instanceof Error ? scanError.message : String(scanError);
+      }
+    }
     return {
       success: true,
       data: {
-        credentials: result.data,
-        count: result.data.length,
+        credentials,
+        count: credentials.length,
         nextCursor: result.nextCursor || undefined,
+        ...(usageScanError ? { usageScanError } : {}),
       },
     };
   } catch (error) {
@@ -3041,7 +3112,7 @@ export async function handleListCredentials(args: unknown, context?: InstanceCon
 export async function handleGetCredential(args: unknown, context?: InstanceContext): Promise<McpToolResponse> {
   try {
     const client = ensureApiConfigured(context);
-    const { id } = getCredentialSchema.parse(args);
+    const { id, includeUsage } = getCredentialSchema.parse(args);
     let credential;
     try {
       credential = await client.getCredential(id);
@@ -3061,9 +3132,20 @@ export async function handleGetCredential(args: unknown, context?: InstanceConte
     }
     // Strip sensitive data field — defense in depth against future n8n versions returning decrypted values
     const { data: _sensitiveData, ...safeCred } = credential;
+    let enriched: CredentialWithUsage = safeCred;
+    let usageScanError: string | undefined;
+    if (includeUsage) {
+      try {
+        const usageMap = await buildCredentialUsageMap(client);
+        const usedIn = usageMap.get(id) ?? [];
+        enriched = { ...safeCred, usedIn, usageCount: usedIn.length };
+      } catch (scanError) {
+        usageScanError = scanError instanceof Error ? scanError.message : String(scanError);
+      }
+    }
     return {
       success: true,
-      data: safeCred,
+      data: usageScanError ? { ...enriched, usageScanError } : enriched,
     };
   } catch (error) {
     return handleCrudError(error);
