@@ -192,6 +192,8 @@ function tryParseJson(val) {
         return val;
     }
 }
+const emptyToUndefined = (v) => typeof v === 'string' && v.trim() === '' ? undefined : v;
+const optionalEmptyAware = (schema) => zod_1.z.preprocess(emptyToUndefined, schema.optional());
 const createWorkflowSchema = zod_1.z.object({
     name: zod_1.z.string(),
     nodes: zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.any())),
@@ -219,10 +221,10 @@ const updateWorkflowSchema = zod_1.z.object({
 });
 const listWorkflowsSchema = zod_1.z.object({
     limit: zod_1.z.number().min(1).max(100).optional(),
-    cursor: zod_1.z.string().optional(),
+    cursor: optionalEmptyAware(zod_1.z.string()),
     active: zod_1.z.boolean().optional(),
     tags: zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.string())).optional(),
-    projectId: zod_1.z.string().optional(),
+    projectId: optionalEmptyAware(zod_1.z.string()),
     excludePinnedData: zod_1.z.boolean().optional(),
 });
 const validateWorkflowSchema = zod_1.z.object({
@@ -257,11 +259,11 @@ const autofixWorkflowSchema = zod_1.z.object({
 });
 const testWorkflowSchema = zod_1.z.object({
     workflowId: zod_1.z.string(),
-    triggerType: zod_1.z.enum(['webhook', 'form', 'chat']).optional(),
-    httpMethod: zod_1.z.enum(['GET', 'POST', 'PUT', 'DELETE']).optional(),
-    webhookPath: zod_1.z.string().optional(),
-    message: zod_1.z.string().optional(),
-    sessionId: zod_1.z.string().optional(),
+    triggerType: optionalEmptyAware(zod_1.z.enum(['webhook', 'form', 'chat'])),
+    httpMethod: optionalEmptyAware(zod_1.z.enum(['GET', 'POST', 'PUT', 'DELETE'])),
+    webhookPath: optionalEmptyAware(zod_1.z.string()),
+    message: optionalEmptyAware(zod_1.z.string()),
+    sessionId: optionalEmptyAware(zod_1.z.string()),
     data: zod_1.z.record(zod_1.z.unknown()).optional(),
     headers: zod_1.z.record(zod_1.z.string()).optional(),
     timeout: zod_1.z.number().optional(),
@@ -269,10 +271,10 @@ const testWorkflowSchema = zod_1.z.object({
 });
 const listExecutionsSchema = zod_1.z.object({
     limit: zod_1.z.number().min(1).max(100).optional(),
-    cursor: zod_1.z.string().optional(),
-    workflowId: zod_1.z.string().optional(),
-    projectId: zod_1.z.string().optional(),
-    status: zod_1.z.enum(['success', 'error', 'waiting']).optional(),
+    cursor: optionalEmptyAware(zod_1.z.string()),
+    workflowId: optionalEmptyAware(zod_1.z.string()),
+    projectId: optionalEmptyAware(zod_1.z.string()),
+    status: optionalEmptyAware(zod_1.z.enum(['success', 'error', 'waiting'])),
     includeData: zod_1.z.boolean().optional(),
 });
 const workflowVersionsSchema = zod_1.z.object({
@@ -2025,7 +2027,7 @@ async function handleDeployTemplate(args, templateService, repository, context) 
 async function handleTriggerWebhookWorkflow(args, context) {
     const triggerWebhookSchema = zod_1.z.object({
         webhookUrl: zod_1.z.string().url(),
-        httpMethod: zod_1.z.enum(['GET', 'POST', 'PUT', 'DELETE']).optional(),
+        httpMethod: optionalEmptyAware(zod_1.z.enum(['GET', 'POST', 'PUT', 'DELETE'])),
         data: zod_1.z.record(zod_1.z.unknown()).optional(),
         headers: zod_1.z.record(zod_1.z.string()).optional(),
         waitForResponse: zod_1.z.boolean().optional(),
@@ -2106,11 +2108,11 @@ const createTableSchema = zod_1.z.object({
         name: zod_1.z.string().min(1, 'Column name cannot be empty'),
         type: zod_1.z.enum(['string', 'number', 'boolean', 'date']).optional(),
     })).min(1, 'At least one column is required'),
-    projectId: zod_1.z.string().optional(),
+    projectId: optionalEmptyAware(zod_1.z.string()),
 });
 const listTablesSchema = zod_1.z.object({
     limit: zod_1.z.number().min(1).max(100).optional(),
-    cursor: zod_1.z.string().optional(),
+    cursor: optionalEmptyAware(zod_1.z.string()),
 });
 const updateTableSchema = tableIdSchema.extend({
     name: zod_1.z.string().min(1, 'New table name cannot be empty'),
@@ -2120,10 +2122,10 @@ const coerceJsonObject = zod_1.z.preprocess(tryParseJson, zod_1.z.record(zod_1.z
 const coerceJsonFilter = zod_1.z.preprocess(tryParseJson, dataTableFilterSchema);
 const getRowsSchema = tableIdSchema.extend({
     limit: zod_1.z.number().min(1).max(100).optional(),
-    cursor: zod_1.z.string().optional(),
+    cursor: optionalEmptyAware(zod_1.z.string()),
     filter: zod_1.z.union([coerceJsonFilter, zod_1.z.string()]).optional(),
-    sortBy: zod_1.z.string().optional(),
-    search: zod_1.z.string().optional(),
+    sortBy: optionalEmptyAware(zod_1.z.string()),
+    search: optionalEmptyAware(zod_1.z.string()),
 });
 const insertRowsSchema = tableIdSchema.extend({
     data: coerceJsonArray.pipe(zod_1.z.array(zod_1.z.record(zod_1.z.unknown())).min(1, 'At least one row is required')),
@@ -2322,10 +2324,47 @@ async function handleDeleteRows(args, context) {
         return handleCrudError(error);
     }
 }
-const listCredentialsSchema = zod_1.z.object({}).passthrough();
+const listCredentialsSchema = zod_1.z.object({
+    includeUsage: zod_1.z.boolean().optional(),
+}).passthrough();
 const getCredentialSchema = zod_1.z.object({
     id: zod_1.z.string({ required_error: 'Credential ID is required' }),
+    includeUsage: zod_1.z.boolean().optional(),
 });
+async function buildCredentialUsageMap(client) {
+    const usage = new Map();
+    const workflows = await client.listAllWorkflows();
+    for (const wf of workflows) {
+        if (!wf.id)
+            continue;
+        const entry = {
+            id: wf.id,
+            name: wf.name,
+            active: wf.active ?? false,
+        };
+        const seenForThisWorkflow = new Set();
+        for (const node of wf.nodes ?? []) {
+            if (!node.credentials)
+                continue;
+            for (const credConfig of Object.values(node.credentials)) {
+                const credId = credConfig?.id;
+                if (typeof credId !== 'string' || credId === '')
+                    continue;
+                if (seenForThisWorkflow.has(credId))
+                    continue;
+                seenForThisWorkflow.add(credId);
+                const list = usage.get(credId);
+                if (list) {
+                    list.push(entry);
+                }
+                else {
+                    usage.set(credId, [entry]);
+                }
+            }
+        }
+    }
+    return usage;
+}
 const createCredentialSchema = zod_1.z.object({
     name: zod_1.z.string({ required_error: 'Credential name is required' }),
     type: zod_1.z.string({ required_error: 'Credential type is required' }),
@@ -2346,14 +2385,29 @@ const getCredentialSchemaTypeSchema = zod_1.z.object({
 async function handleListCredentials(args, context) {
     try {
         const client = ensureApiConfigured(context);
-        listCredentialsSchema.parse(args);
+        const { includeUsage } = listCredentialsSchema.parse(args);
         const result = await client.listCredentials();
+        let credentials = result.data;
+        let usageScanError;
+        if (includeUsage) {
+            try {
+                const usageMap = await buildCredentialUsageMap(client);
+                credentials = result.data.map((cred) => {
+                    const usedIn = (cred.id ? usageMap.get(cred.id) : undefined) ?? [];
+                    return { ...cred, usedIn, usageCount: usedIn.length };
+                });
+            }
+            catch (scanError) {
+                usageScanError = scanError instanceof Error ? scanError.message : String(scanError);
+            }
+        }
         return {
             success: true,
             data: {
-                credentials: result.data,
-                count: result.data.length,
+                credentials,
+                count: credentials.length,
                 nextCursor: result.nextCursor || undefined,
+                ...(usageScanError ? { usageScanError } : {}),
             },
         };
     }
@@ -2364,7 +2418,7 @@ async function handleListCredentials(args, context) {
 async function handleGetCredential(args, context) {
     try {
         const client = ensureApiConfigured(context);
-        const { id } = getCredentialSchema.parse(args);
+        const { id, includeUsage } = getCredentialSchema.parse(args);
         let credential;
         try {
             credential = await client.getCredential(id);
@@ -2383,9 +2437,21 @@ async function handleGetCredential(args, context) {
             }
         }
         const { data: _sensitiveData, ...safeCred } = credential;
+        let enriched = safeCred;
+        let usageScanError;
+        if (includeUsage) {
+            try {
+                const usageMap = await buildCredentialUsageMap(client);
+                const usedIn = usageMap.get(id) ?? [];
+                enriched = { ...safeCred, usedIn, usageCount: usedIn.length };
+            }
+            catch (scanError) {
+                usageScanError = scanError instanceof Error ? scanError.message : String(scanError);
+            }
+        }
         return {
             success: true,
-            data: safeCred,
+            data: usageScanError ? { ...enriched, usageScanError } : enriched,
         };
     }
     catch (error) {

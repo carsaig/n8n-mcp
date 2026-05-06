@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.51.1] - 2026-05-06
+
+### Security
+
+- **Hardened `WorkflowSanitizer` (telemetry workflow ingestion) against new secret and PII categories (#779).** Added regex coverage for OpenAI `sk-proj-` / OpenRouter `sk-or-`, Stripe, GitHub PATs, GitLab, Hugging Face, Notion, GoHighLevel, Slack, AWS access key IDs, generic JWTs, Supabase secret/publishable keys, self-hosted n8n hostnames, and Supabase project URLs — all with type-aware placeholders (`[REDACTED_LLM_API_KEY]`, `[REDACTED_SUPABASE_KEY]`, `[REDACTED_STRIPE_KEY]`, `[REDACTED_API_TOKEN]`, `[REDACTED_JWT]`, `[REDACTED_N8N_HOST_URL]`, `[REDACTED_SUPABASE_URL]`). Added email and phone redaction for free-text node parameters (`systemMessage`, `text`, `html`, `prompt`, …). Made the generic 20-31 / 32+ char fallbacks idempotent via a `(?!REDACTED)` negative lookahead and dropped the early-break in `sanitizeString` so strings with secrets matching different patterns get every match redacted. Tightened the Bearer regex to stop at common string delimiters (quotes, commas, semicolons, closing brackets) so `auth: 'Bearer <token>'` no longer eats the closing quote. Tightened the phone regex with digit/hyphen lookbehind/lookahead so UUIDs and other hex-with-hyphen IDs aren't misclassified as phone numbers.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.51.0] - 2026-05-06
+
+### Added
+
+- **`n8n_manage_credentials` now reports which workflows reference each credential.** Pass `includeUsage: true` to `action: "list"` or `action: "get"` to attach a `usedIn: [{id, name, active}]` array and a `usageCount` to every credential. The reverse index is built client-side by scanning workflows (n8n's public API has no native lookup), deduplicated per workflow, and capped at the same 5000-workflow limit `n8n_audit_instance` uses. Default behavior is unchanged — no extra API calls when the flag is omitted. If the workflow scan fails the response degrades to base credentials with a `usageScanError` field rather than failing the whole call.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.50.5] - 2026-05-05
+
+### Fixed
+
+- **Advertise the Bearer auth scheme on `401` responses (#604).** HTTP-mode `/mcp`, `/sse`, and `/messages` now return an RFC 6750-compliant `WWW-Authenticate` challenge alongside the existing JSON-RPC `-32001` error body. Missing-credentials responses use `Bearer realm="n8n-mcp"` (no `error=` keyword, per RFC 6750 §3); rejected credentials use `error="invalid_request"` for non-Bearer schemes and `error="invalid_token"` for bad bearer secrets. Lets MCP scanners and OAuth-discovery clients distinguish "auth required" from "endpoint unreachable" without reading the JSON body. Originally authored by @voidborne-d (#767).
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.50.4] - 2026-05-05
+
+### Fixed
+
+- `n8n_list_workflows` and `n8n_executions` no longer fail with `VALIDATION_ERROR: Empty value found for query parameter` when MCP clients (e.g. opencode v1.14.35) serialize all schema fields — including optional ones — as empty strings. Optional string params (`cursor`, `projectId`, `workflowId`, `status`, `sortBy`, `search`) are now coerced to `undefined` before reaching the n8n API. Reported and diagnosed by @ale90bsas (#774).
+- The same coercion is applied to `n8n_manage_datatable` (list/create/get-rows actions), `n8n_test_workflow`, and `n8n_trigger_webhook_workflow`, all of which had the same vulnerability surface from a broader audit.
+- `serializeDataTableParams` in the n8n API client now also skips blank-string values as defense-in-depth.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.50.3] - 2026-05-04
 
 ### Fixed
