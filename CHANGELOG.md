@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.53.0] - 2026-05-14
+
+### Fixed
+
+- **`n8n_get_workflow` no longer exceeds Claude Code's per-tool result cap on active workflows (#777).** n8n's draft/publish model returns a nested `activeVersion` object on every workflow GET, duplicating the live graph's `nodes` and `connections` alongside the draft. On the ~50% of workflows that are active, this pushed responses past Claude Code's default 25 000-token MCP cap, so the host persisted the result to a `/var/folders/...` file the model's sandboxed Bash couldn't read — effectively breaking the tool for any non-trivial workflow. `handleGetWorkflow` (mode `full`) and `handleGetWorkflowDetails` (mode `details`) now strip the heavy `activeVersion` payload while preserving the lightweight `activeVersionId` pointer, cutting response size roughly in half. As a defense-in-depth layer for genuinely huge workflows, the `n8n_get_workflow` tool definition now carries `_meta["anthropic/maxResultSizeChars"]: 450000` to opt the tool above the default cap (per the [Claude Code MCP spec](https://code.claude.com/docs/en/mcp#raise-the-limit-for-a-specific-tool)) — the value sits below the protocol's 500k-char ceiling to leave headroom for the MCP/JSON-RPC envelope. `UIAppRegistry.injectToolMeta` was switched from assignment to a spread-merge so per-tool `_meta` keys (like the size override) are preserved when UI metadata is injected. Reported by @nepalez.
+
+### Added
+
+- **`n8n_get_workflow` gains `mode='active'` for inspecting the published graph.** Because n8n's editor saves a draft separately from the published/running version, callers that need to reason about what is actually executing (rather than what is being edited) now have a dedicated mode. The response is single-shaped — `nodes` and `connections` are populated from `activeVersion`, with `activeVersionId`, `versionCreatedAt`, and `versionName` exposed at the top level. `versionCreatedAt` is the version row's creation timestamp (within ~1s of the publish event in current n8n; we don't claim they're identical). On older n8n versions without the draft/publish split, the mode falls back to `workflow.nodes` when `active: true` so the mode stays usable across n8n versions; `NO_ACTIVE_VERSION` is returned only for inactive workflows that were never published. Type-safe support for the new fields was added to the `Workflow` interface as `ActiveWorkflowVersion`.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
+## [2.52.0] - 2026-05-13
+
+### Changed
+
+- **Updated n8n dependencies to 2.20.x.** `n8n-nodes-base` 2.18.3 → 2.20.4, `n8n-core` 2.18.3 → 2.20.3, `n8n-workflow` 2.18.3 → 2.20.0, `@n8n/n8n-nodes-langchain` 2.18.3 → 2.20.4. Pinned exactly (no caret) so a fresh `npm install` after a future minor release of any of these packages can't slip in a different node set than `data/nodes.db` was rebuilt against — `scripts/update-n8n-deps.js` now writes exact pins for the same reason. Database rebuilt against the new packages; community node rows preserved across the rebuild.
+- **`get_node` (essentials/standard detail) `version` field is now a number, not a string** *(behavior change for all callers, not just community nodes)*. Previously the value came straight from the SQLite `version` TEXT column (`"1"`, `"2.3"`); it is now coerced to a finite JS number (`1`, `2.3`) so it can be assigned directly as `typeVersion` in workflow JSON. Callers that did `.startsWith()`, regex matching, or string comparison on the field need to coerce themselves or update to numeric handling. The `versionNotice` string is unchanged.
+
+### Fixed
+
+- **Community nodes: stop advertising npm package version as `typeVersion` (#781).** For community nodes, `get_node` previously returned the npm package version (e.g. `"0.2.21"`) in the `version` field and emitted `versionNotice: "Use typeVersion: 0.2.21 when creating this node"`. The advertised value is not a valid JS number — assigning `typeVersion: 0.2` produced workflows that n8n's runtime rendered as red/broken nodes even though both `validate_workflow` and `n8n_validate_workflow` reported them as valid. The community-node parser no longer falls back to the npm package version when the descriptor's version is missing (Strapi path) and never seeds the npm version as `typeVersion` (npm-only path); both default to `1`, which is what declarative community nodes register at runtime. The `get_node` response, for community nodes, surfaces `isCommunity: true`, `npmVersion`, a community-aware `versionNotice`, and a `metadata.versionCoerced` audit field whenever stale seed data has to be resolved on the fly. The shipped `data/nodes.db` is migrated in place: 118 community rows whose stored `version` was a multi-dot semver or contained letters were reset to `'1'`. `WorkflowValidator.validateAllNodes` now rejects non-finite typeVersions (including `NaN`) with an explicit "must be a finite non-negative number" message, parses comma-separated and array-form `nodeInfo.version` strings before min/max comparisons, falls back to suggesting `typeVersion: 1` when the database version is unparseable, and emits a "Cannot validate typeVersion" warning when stored seed data is unparseable so callers know the min/max checks were skipped rather than silently passed. Reported by @czlonkowski.
+
+Conceived by Romuald Członkowski - https://www.aiadvisors.pl/en
+
 ## [2.51.3] - 2026-05-11
 
 ### Security
