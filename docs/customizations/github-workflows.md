@@ -146,7 +146,7 @@ Key behavior:
    - Auth with GHCR_PAT; tags pushed: latest and <version>
 4) Post-publish automation PR
    - Bumps docker-compose.coolify.yml image tag to <version>
-   - Rewrites docs/** references to ghcr.io/carsaig/n8n-mcp:v2.35.2-cs.1s.11s.10s.9s.8s.7s.6s.5s.4s.2s.1sion>
+   - Rewrites docs/** references to ghcr.io/carsaig/n8n-mcp:v2.35.2-cs.3s.1s.11s.10s.9s.8s.7s.6s.5s.4s.2s.1sion>
    - Generates docs/custom_builds/release_<version with cs as dots>.md (e.g., release_v2.11.5.cs.2.md)
 5) Deployment & status
    - Deployments recorded to environment: Coolify
