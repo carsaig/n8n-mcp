@@ -96,6 +96,7 @@ const telemetry_1 = require("../telemetry");
 const cache_utils_1 = require("../utils/cache-utils");
 const execution_processor_1 = require("../services/execution-processor");
 const npm_version_checker_1 = require("../utils/npm-version-checker");
+const mcp_input_normalizer_1 = require("../utils/mcp-input-normalizer");
 let defaultApiClient = null;
 let lastDefaultConfigUrl = null;
 const cacheMutex = new cache_utils_1.CacheMutex();
@@ -215,9 +216,9 @@ const emptyToUndefined = (v) => typeof v === 'string' && v.trim() === '' ? undef
 const optionalEmptyAware = (schema) => zod_1.z.preprocess(emptyToUndefined, schema.optional());
 const createWorkflowSchema = zod_1.z.object({
     name: zod_1.z.string(),
-    nodes: zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.any())),
-    connections: zod_1.z.preprocess(tryParseJson, zod_1.z.record(zod_1.z.string(), zod_1.z.any())),
-    settings: zod_1.z.preprocess(tryParseJson, zod_1.z.object({
+    nodes: zod_1.z.preprocess(mcp_input_normalizer_1.normalizeMcpWorkflowNodes, zod_1.z.array(zod_1.z.any())),
+    connections: zod_1.z.preprocess(mcp_input_normalizer_1.normalizeMcpWorkflowConnections, zod_1.z.record(zod_1.z.string(), zod_1.z.any())),
+    settings: zod_1.z.preprocess(mcp_input_normalizer_1.normalizeMcpJsonValue, zod_1.z.object({
         executionOrder: zod_1.z.enum(['v0', 'v1']).optional(),
         timezone: zod_1.z.string().optional(),
         saveDataErrorExecution: zod_1.z.enum(['all', 'none']).optional(),
@@ -232,9 +233,9 @@ const createWorkflowSchema = zod_1.z.object({
 const updateWorkflowSchema = zod_1.z.object({
     id: zod_1.z.string(),
     name: zod_1.z.string().optional(),
-    nodes: zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.any())).optional(),
-    connections: zod_1.z.preprocess(tryParseJson, zod_1.z.record(zod_1.z.string(), zod_1.z.any())).optional(),
-    settings: zod_1.z.preprocess(tryParseJson, zod_1.z.any()).optional(),
+    nodes: zod_1.z.preprocess(mcp_input_normalizer_1.normalizeMcpWorkflowNodes, zod_1.z.array(zod_1.z.any())).optional(),
+    connections: zod_1.z.preprocess(mcp_input_normalizer_1.normalizeMcpWorkflowConnections, zod_1.z.record(zod_1.z.string(), zod_1.z.any())).optional(),
+    settings: zod_1.z.preprocess(mcp_input_normalizer_1.normalizeMcpJsonValue, zod_1.z.any()).optional(),
     createBackup: zod_1.z.boolean().optional(),
     intent: zod_1.z.string().optional(),
 });
@@ -242,7 +243,7 @@ const listWorkflowsSchema = zod_1.z.object({
     limit: zod_1.z.number().min(1).max(100).optional(),
     cursor: optionalEmptyAware(zod_1.z.string()),
     active: zod_1.z.boolean().optional(),
-    tags: zod_1.z.preprocess(tryParseJson, zod_1.z.array(zod_1.z.string())).optional(),
+    tags: zod_1.z.preprocess(mcp_input_normalizer_1.normalizeMcpJsonValue, zod_1.z.array(zod_1.z.string())).optional(),
     projectId: optionalEmptyAware(zod_1.z.string()),
     excludePinnedData: zod_1.z.boolean().optional(),
 });
@@ -2467,6 +2468,35 @@ function stripCredentialData(credential) {
     const { data: _sensitiveData, ...safeCred } = credential;
     return safeCred;
 }
+function isCredentialReadUnsupported(error) {
+    if (typeof error !== 'object' || error === null) {
+        return false;
+    }
+    const status = error.statusCode;
+    if (status === 405 || status === 403) {
+        return true;
+    }
+    if (status !== undefined) {
+        return false;
+    }
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    return message.includes('not allowed');
+}
+function credentialReadUnsupportedResponse(error) {
+    return {
+        success: false,
+        error: 'This n8n instance\'s public API rejected the credential read. On older n8n versions the public API ' +
+            'does not expose GET /credentials at all; on newer ones this can mean the API key or instance settings ' +
+            'do not permit credential reads. The create, delete, and getSchema actions generally still work, and ' +
+            'update does too where the API version supports it (it needs a known credential ID, not list/get). ' +
+            'To find an existing credential\'s ID, open it in the n8n UI — the ID is in the URL.',
+        code: 'NOT_SUPPORTED',
+        details: {
+            statusCode: error.statusCode,
+            cause: error instanceof Error ? error.message : String(error),
+        },
+    };
+}
 async function handleListCredentials(args, context) {
     try {
         const client = ensureApiConfigured(context);
@@ -2506,6 +2536,9 @@ async function handleListCredentials(args, context) {
         };
     }
     catch (error) {
+        if (isCredentialReadUnsupported(error)) {
+            return credentialReadUnsupportedResponse(error);
+        }
         return handleCrudError(error);
     }
 }
@@ -2518,10 +2551,7 @@ async function handleGetCredential(args, context) {
             credential = await client.getCredential(id);
         }
         catch (getError) {
-            const status = getError.statusCode;
-            const msg = getError.message ?? '';
-            const isUnsupported = status === 405 || status === 403 || msg.includes('not allowed');
-            if (!isUnsupported) {
+            if (!isCredentialReadUnsupported(getError)) {
                 throw getError;
             }
             const all = await client.listAllCredentials();
@@ -2549,6 +2579,9 @@ async function handleGetCredential(args, context) {
         };
     }
     catch (error) {
+        if (isCredentialReadUnsupported(error)) {
+            return credentialReadUnsupportedResponse(error);
+        }
         return handleCrudError(error);
     }
 }
