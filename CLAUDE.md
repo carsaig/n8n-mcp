@@ -38,8 +38,7 @@ src/
 │   └── template-service.ts    # Template business logic (NEW in v2.4.1)
 ├── scripts/
 │   ├── rebuild.ts             # Database rebuild with validation
-│   ├── validate.ts            # Node validation
-│   ├── test-nodes.ts          # Critical node tests
+│   ├── validate.ts            # Node validation (includes critical-node checks)
 │   ├── test-essentials.ts     # Test new essentials tools (NEW in v2.4)
 │   ├── test-enhanced-validation.ts # Test enhanced validation (NEW in v2.4.2)
 │   ├── test-workflow-validation.ts # Test workflow validation (NEW in v2.5.0)
